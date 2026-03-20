@@ -1,23 +1,49 @@
-# Python environment files
-venv/
-.venv/
-env/
-
-# Cache files
-__pycache__/
-*.pyc
-
-# Sensitive information (API Keys)
+# Environment variables
 .env
+.env.local
+.env.*.local
 
-# Streamlit config
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# FAISS Index
+faiss_index_legal/
+*.index
+
+# Logs
+*.log
+logs/
+
+# Streamlit
 .streamlit/
+.streamlit/secrets.toml
 
-# Dataset folder (Large files)
-Dataset/
-*.pdf
-*.zip
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+~$*
