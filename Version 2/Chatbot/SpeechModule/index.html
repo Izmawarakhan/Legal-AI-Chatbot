@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ARIA — Voice AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #050810;
+    --surface: #0c1220;
+    --surface2: #111827;
+    --accent: #00e5ff;
+    --accent2: #7c3aed;
+    --accent3: #10b981;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --danger: #ef4444;
+    --glow: 0 0 20px rgba(0,229,255,0.3);
+    --glow2: 0 0 40px rgba(0,229,255,0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(0,229,255,0.04) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(0,229,255,0.1);
+  }
+
+  .logo { display: flex; align-items: center; gap: 0.75rem; }
+
+  .logo-icon {
+    width: 38px; height: 38px;
+    border: 2px solid var(--accent);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: var(--glow);
+    animation: pulse-border 3s ease-in-out infinite;
+  }
+
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 10px rgba(0,229,255,0.3); }
+    50%       { box-shadow: 0 0 25px rgba(0,229,255,0.7); }
+  }
+
+  .logo-icon svg { width: 20px; height: 20px; color: var(--accent); }
+
+  .logo-text {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 1.4rem;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+  }
+
+  .logo-sub { font-size: 0.65rem; color: var(--muted); letter-spacing: 0.15em; text-transform: uppercase; }
+
+  .status-badge { display: flex; align-items: center; gap: 0.5rem; font-size: 0.7rem; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: all 0.3s; }
+  .status-dot.active { background: var(--accent3); box-shadow: 0 0 8px var(--accent3); animation: blink 1.5s ease-in-out infinite; }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+  }
+
+  .api-section {
+    background: var(--surface);
+    border: 1px solid rgba(0,229,255,0.15);
+    border-radius: 16px;
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .api-label { font-size: 0.7rem; color: var(--accent); letter-spacing: 0.15em; text-transform: uppercase; white-space: nowrap; }
+
+  .api-input {
+    flex: 1; min-width: 200px;
+    background: var(--surface2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .api-input:focus { border-color: rgba(0,229,255,0.4); }
+  .api-input::placeholder { color: var(--muted); }
+
+  .btn-save {
+    background: rgba(0,229,255,0.1);
+    border: 1px solid rgba(0,229,255,0.3);
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .btn-save:hover { background: rgba(0,229,255,0.2); box-shadow: var(--glow); }
+
+  .chat-window {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid rgba(0,229,255,0.1);
+    border-radius: 20px;
+    padding: 1.5rem;
+    min-height: 380px;
+    max-height: 420px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+    scroll-behavior: smooth;
+  }
+
+  .chat-window::-webkit-scrollbar { width: 4px; }
+  .chat-window::-webkit-scrollbar-track { background: transparent; }
+  .chat-window::-webkit-scrollbar-thumb { background: rgba(0,229,255,0.2); border-radius: 99px; }
+
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .empty-icon {
+    width: 56px; height: 56px;
+    border: 1px solid rgba(0,229,255,0.2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .empty-icon svg { width: 26px; height: 26px; color: rgba(0,229,255,0.4); }
+  .empty-state p { font-size: 0.8rem; letter-spacing: 0.05em; }
+  .empty-state span { font-size: 0.7rem; color: rgba(100,116,139,0.6); }
+
+  .message { display: flex; gap: 0.85rem; animation: fadeSlide 0.35s ease; }
+
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .message.user { flex-direction: row-reverse; }
+
+  .avatar {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; font-weight: 700;
+  }
+
+  .avatar.ai { background: rgba(0,229,255,0.1); border: 1px solid rgba(0,229,255,0.3); color: var(--accent); }
+  .avatar.user-av { background: rgba(124,58,237,0.2); border: 1px solid rgba(124,58,237,0.4); color: #a78bfa; }
+
+  .bubble {
+    max-width: 75%;
+    padding: 0.85rem 1.1rem;
+    border-radius: 14px;
+    font-size: 0.82rem;
+    line-height: 1.65;
+    letter-spacing: 0.01em;
+  }
+
+  .bubble.ai { background: var(--surface2); border: 1px solid rgba(0,229,255,0.1); border-top-left-radius: 4px; color: var(--text); }
+  .bubble.user { background: rgba(124,58,237,0.15); border: 1px solid rgba(124,58,237,0.25); border-top-right-radius: 4px; color: #ddd6fe; }
+
+  .typing-dots { display: flex; gap: 5px; align-items: center; padding: 0.4rem 0; }
+  .typing-dots span { width: 7px; height: 7px; background: var(--accent); border-radius: 50%; opacity: 0.4; animation: dot 1.4s ease-in-out infinite; }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes dot {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+    40%            { opacity: 1;   transform: scale(1.1); }
+  }
+
+  .controls { display: flex; flex-direction: column; gap: 1rem; }
+
+  .transcript-bar {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px;
+    padding: 0.85rem 1.2rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    min-height: 48px;
+    display: flex; align-items: center;
+    transition: border-color 0.3s;
+    letter-spacing: 0.02em;
+    line-height: 1.5;
+  }
+
+  .transcript-bar.listening { border-color: rgba(0,229,255,0.4); color: var(--text); box-shadow: 0 0 0 3px rgba(0,229,255,0.06); }
+
+  .mic-row { display: flex; align-items: center; justify-content: center; gap: 1.5rem; }
+
+  .mic-btn {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,229,255,0.3);
+    background: rgba(0,229,255,0.05);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.25s;
+    position: relative;
+    color: var(--accent);
+  }
+
+  .mic-btn:hover { border-color: var(--accent); background: rgba(0,229,255,0.12); box-shadow: var(--glow); transform: scale(1.05); }
+
+  .mic-btn.recording {
+    border-color: var(--danger);
+    background: rgba(239,68,68,0.1);
+    color: var(--danger);
+    box-shadow: 0 0 25px rgba(239,68,68,0.35);
+    animation: mic-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes mic-pulse {
+    0%, 100% { transform: scale(1); }
+    50%       { transform: scale(1.06); }
+  }
+
+  .mic-btn svg { width: 28px; height: 28px; }
+
+  .mic-btn.recording::before,
+  .mic-btn.recording::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid var(--danger);
+    animation: ripple 1.8s ease-out infinite;
+    opacity: 0;
+  }
+
+  .mic-btn.recording::before { width: 90px;  height: 90px; }
+  .mic-btn.recording::after  { width: 110px; height: 110px; animation-delay: 0.6s; }
+
+  @keyframes ripple {
+    0%   { opacity: 0.5; transform: scale(0.9); }
+    100% { opacity: 0;   transform: scale(1.2); }
+  }
+
+  .btn-clear {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.08);
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    padding: 0.55rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+  }
+
+  .btn-clear:hover { border-color: rgba(255,255,255,0.2); color: var(--text); }
+
+  .mic-label { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; text-align: center; margin-top: 0.25rem; }
+
+  .voice-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .voice-label { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; }
+
+  .voice-select {
+    flex: 1; min-width: 160px;
+    background: var(--surface2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 0.5rem 0.85rem;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .notif {
+    position: fixed;
+    bottom: 1.5rem; right: 1.5rem;
+    background: var(--surface2);
+    border: 1px solid rgba(0,229,255,0.25);
+    border-radius: 10px;
+    padding: 0.75rem 1.1rem;
+    font-size: 0.75rem;
+    color: var(--text);
+    box-shadow: var(--glow2);
+    z-index: 100;
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all 0.35s cubic-bezier(0.16,1,0.3,1);
+    max-width: 320px;
+    line-height: 1.5;
+  }
+
+  .notif.show { transform: translateY(0); opacity: 1; }
+  .notif.error { border-color: rgba(239,68,68,0.5); background: #1a0f0f; }
+
+  footer { text-align: center; font-size: 0.65rem; color: rgba(100,116,139,0.4); letter-spacing: 0.1em; text-transform: uppercase; padding-top: 0.5rem; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </div>
+      <div>
+        <div class="logo-text">ARIA</div>
+        <div class="logo-sub">Voice AI Interface</div>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Offline</span>
+    </div>
+  </header>
+
+  <div class="api-section">
+    <span class="api-label">🔑 Groq API Key</span>
+    <input class="api-input" type="password" id="apiKey" placeholder="gsk_xxxxxxxxxxxxxxxxxxxx" autocomplete="off"/>
+    <button class="btn-save" onclick="saveKey()">Connect</button>
+  </div>
+
+  <div class="chat-window" id="chatWindow">
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </div>
+      <p>Press the mic and start speaking</p>
+      <span>Powered by Groq + LLaMA 3 · localhost:3000</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="transcript-bar" id="transcript">
+      Transcript will appear here while you speak...
+    </div>
+
+    <div class="mic-row">
+      <button class="btn-clear" onclick="clearChat()">Clear</button>
+      <div style="text-align:center">
+        <button class="mic-btn" id="micBtn" onclick="toggleMic()">
+          <svg id="micIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+        </button>
+        <div class="mic-label" id="micLabel">Tap to Speak</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:0.4rem">
+        <span class="voice-label">🔊 Voice</span>
+        <select class="voice-select" id="voiceSelect"></select>
+      </div>
+    </div>
+  </div>
+
+  <footer>ARIA v1.0 · Phase 1 · Proxy: localhost:3000/chat</footer>
+</div>
+
+<div class="notif" id="notif"></div>
+
+<script>
+// ── Config ──────────────────────────────────────────
+const PROXY_URL = 'http://localhost:3000/chat';   // ← Node.js proxy
+
+// ── State ───────────────────────────────────────────
+let apiKey = '';
+let isRecording = false;
+let recognition = null;
+let voices = [];
+let isSpeaking = false;
+let conversationHistory = [];   // keeps full chat for context
+
+// ── Init ────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  initVoices();
+  setupSpeechRecognition();
+  const saved = sessionStorage.getItem('groq_key');
+  if (saved) { document.getElementById('apiKey').value = saved; saveKey(true); }
+});
+
+// ── API Key ──────────────────────────────────────────
+function saveKey(silent = false) {
+  const val = document.getElementById('apiKey').value.trim();
+  if (!val) { showNotif('Please enter your Groq API key', 'error'); return; }
+  apiKey = val;
+  sessionStorage.setItem('groq_key', val);
+  setStatus(true);
+  if (!silent) showNotif('✅ Connected — LLaMA 3 ready via proxy');
+}
+
+// ── Status ───────────────────────────────────────────
+function setStatus(on) {
+  const dot  = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.classList.toggle('active', on);
+  text.textContent = on ? 'Online' : 'Offline';
+}
+
+// ── Voices ───────────────────────────────────────────
+function initVoices() {
+  const sel = document.getElementById('voiceSelect');
+  const populate = () => {
+    voices = window.speechSynthesis.getVoices();
+    sel.innerHTML = '';
+    voices.forEach((v, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${v.name} (${v.lang})`;
+      sel.appendChild(opt);
+    });
+    const idx = voices.findIndex(v => v.lang.startsWith('en'));
+    if (idx !== -1) sel.value = idx;
+  };
+  populate();
+  window.speechSynthesis.onvoiceschanged = populate;
+}
+
+function getSelectedVoice() {
+  return voices[document.getElementById('voiceSelect').value] || null;
+}
+
+// ── Speech Recognition ────────────────────────────────
+function setupSpeechRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    showNotif('❌ Speech Recognition not supported. Use Chrome or Edge.', 'error');
+    return;
+  }
+
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onstart = () => {
+    setMicState(true);
+    document.getElementById('transcript').textContent = 'Listening...';
+    document.getElementById('transcript').classList.add('listening');
+  };
+
+  recognition.onresult = (e) => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      e.results[i].isFinal ? (final += t) : (interim += t);
+    }
+    document.getElementById('transcript').textContent = final || interim || 'Listening...';
+  };
+
+  recognition.onend = () => {
+    setMicState(false);
+    document.getElementById('transcript').classList.remove('listening');
+    const text = document.getElementById('transcript').textContent.trim();
+    const skip = ['Listening...', 'Transcript will appear here while you speak...', ''];
+    if (!skip.includes(text)) sendToGroq(text);
+  };
+
+  recognition.onerror = (e) => {
+    setMicState(false);
+    document.getElementById('transcript').classList.remove('listening');
+    if (e.error !== 'no-speech') showNotif(`Mic error: ${e.error}`, 'error');
+  };
+}
+
+// ── Mic Toggle ────────────────────────────────────────
+function toggleMic() {
+  if (!recognition) { showNotif('Speech Recognition unavailable', 'error'); return; }
+  if (isSpeaking)   { window.speechSynthesis.cancel(); isSpeaking = false; }
+  if (!isRecording) {
+    if (!apiKey) { showNotif('Please connect your Groq API key first', 'error'); return; }
+    recognition.start();
+  } else {
+    recognition.stop();
+  }
+}
+
+function setMicState(on) {
+  isRecording = on;
+  const btn   = document.getElementById('micBtn');
+  const label = document.getElementById('micLabel');
+  const icon  = document.getElementById('micIcon');
+  if (on) {
+    btn.classList.add('recording');
+    label.textContent = 'Tap to Stop';
+    icon.innerHTML = `<rect x="9" y="9" width="6" height="6" rx="1"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>`;
+  } else {
+    btn.classList.remove('recording');
+    label.textContent = 'Tap to Speak';
+    icon.innerHTML = `<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>`;
+  }
+}
+
+// ── Groq via Proxy ────────────────────────────────────
+async function sendToGroq(userText) {
+  hideEmpty();
+  addMessage('user', userText);
+  document.getElementById('transcript').textContent = '⚡ Thinking...';
+
+  // save to history
+  conversationHistory.push({ role: 'user', content: userText });
+
+  const typingId = addTyping();
+
+  try {
+    const res = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiKey,
+        userMessage: userText,
+        history: conversationHistory.slice(-8)   // last 4 turns
+      })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Server ${res.status}: ${errText}`);
+    }
+
+    const data = await res.json();
+    removeTyping(typingId);
+
+    if (data.error) {
+      showNotif(`Groq error: ${data.error.message}`, 'error');
+      document.getElementById('transcript').textContent = '❌ ' + data.error.message;
+      conversationHistory.pop();
+      return;
+    }
+
+    const reply = data.choices[0].message.content.trim();
+    conversationHistory.push({ role: 'assistant', content: reply });
+
+    addMessage('ai', reply);
+    document.getElementById('transcript').textContent = '✅ Done — tap mic to speak again';
+    speak(reply);
+
+  } catch (err) {
+    removeTyping(typingId);
+    conversationHistory.pop();
+    showNotif(`❌ ${err.message}`, 'error');
+    document.getElementById('transcript').textContent = 'Error: ' + err.message;
+    console.error('Fetch error:', err);
+  }
+}
+
+// ── TTS ───────────────────────────────────────────────
+function speak(text) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.voice = getSelectedVoice();
+  utt.rate  = 1.05;
+  utt.pitch = 1;
+  utt.onstart = () => { isSpeaking = true; };
+  utt.onend   = () => { isSpeaking = false; };
+  window.speechSynthesis.speak(utt);
+}
+
+// ── Chat UI ───────────────────────────────────────────
+function hideEmpty() {
+  const e = document.getElementById('emptyState');
+  if (e) e.style.display = 'none';
+}
+
+function addMessage(role, text) {
+  const win = document.getElementById('chatWindow');
+  const div = document.createElement('div');
+  div.className = `message ${role}`;
+
+  const av = document.createElement('div');
+  av.className = `avatar ${role === 'ai' ? 'ai' : 'user-av'}`;
+  av.textContent = role === 'ai' ? 'AI' : 'YOU';
+
+  const bubble = document.createElement('div');
+  bubble.className = `bubble ${role}`;
+  bubble.textContent = text;
+
+  div.appendChild(av);
+  div.appendChild(bubble);
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
+}
+
+function addTyping() {
+  const win = document.getElementById('chatWindow');
+  const id  = 'typing_' + Date.now();
+  const div = document.createElement('div');
+  div.className = 'message ai'; div.id = id;
+
+  const av = document.createElement('div');
+  av.className = 'avatar ai'; av.textContent = 'AI';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble ai';
+  bubble.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div>`;
+
+  div.appendChild(av); div.appendChild(bubble);
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
+  return id;
+}
+
+function removeTyping(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+function clearChat() {
+  conversationHistory = [];
+  document.getElementById('chatWindow').innerHTML = `
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </div>
+      <p>Press the mic and start speaking</p>
+      <span>Powered by Groq + LLaMA 3 · localhost:3000</span>
+    </div>`;
+  document.getElementById('transcript').textContent = 'Transcript will appear here while you speak...';
+}
+
+// ── Notification ──────────────────────────────────────
+let notifTimer = null;
+function showNotif(msg, type = '') {
+  const n = document.getElementById('notif');
+  n.textContent = msg;
+  n.className = `notif ${type} show`;
+  clearTimeout(notifTimer);
+  notifTimer = setTimeout(() => n.classList.remove('show'), 4000);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+D:\FYP\old_fiels\Chatbot\2Api.py
+D:\FYP\old_fiels\Chatbot\Api.py
+D:\FYP\old_fiels\Chatbot\Api2.py
+D:\FYP\old_fiels\Chatbot\app.py
+D:\FYP\old_fiels\Chatbot\faiss_index_legal
+D:\FYP\old_fiels\Chatbot\ffmpeg.exe
+D:\FYP\old_fiels\Chatbot\ffmpeg.zip
+D:\FYP\old_fiels\Chatbot\files.txt
+D:\FYP\old_fiels\Chatbot\gsk_CbGHw6gfn0BgvjbPgK3wWGdyb3FYQoO.txt
+D:\FYP\old_fiels\Chatbot\utils.py
+D:\FYP\old_fiels\Chatbot\__pycache__
+D:\FYP\old_fiels\Chatbot\faiss_index_legal\index.faiss
+D:\FYP\old_fiels\Chatbot\faiss_index_legal\index.pkl
+D:\FYP\old_fiels\Chatbot\__pycache__\Api.cpython-39.pyc
+D:\FYP\old_fiels\Chatbot\__pycache__\utils.cpython-39.pyc
