@@ -1,0 +1,24 @@
+diff --git a/requirements.txt b/requirements.txt
+index aafff4b..a023e8c 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -22,7 +22,7 @@ langchain-huggingface==0.0.1
+ # --- Vector Store & Embeddings ---
+ faiss-cpu==1.7.4
+ sentence-transformers>=3.0.0
+-huggingface-hub==0.20.0
++huggingface-hub>=0.23.0
+ 
+ # --- Document Processing ---
+ PyPDF2==3.0.1
+@@ -31,6 +31,10 @@ pypdf==4.0.0
+ # --- AI Models ---
+ transformers==4.36.0
+ 
++# --- Database ---
++pymongo==4.6.1
++certifi==2023.11.17
++
+ # --- CORS (included in FastAPI) ---
+ # No separate package needed
+ 
