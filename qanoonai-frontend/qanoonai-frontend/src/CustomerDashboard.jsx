@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import ChatbotPage from "./ChatbotPage";
-const API_URL = "http://localhost:8001";
-const CHATBOT_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8001";
+const CHATBOT_URL = import.meta.env.VITE_CHATBOT_URL || "http://localhost:8000";
 const PLANS_MAP = { pro: 999, premium: 2499 };
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap');
