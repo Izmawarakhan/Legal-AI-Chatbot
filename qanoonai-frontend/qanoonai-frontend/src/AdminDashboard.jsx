@@ -290,26 +290,7 @@ function CasesSection() {
     } catch {}
   };
 
-  const PaginationBar = () => {
-    const pages = [];
-    const start = Math.max(1, page - 2);
-    const end = Math.min(totalPages, page + 2);
-    for (let i = start; i <= end; i++) pages.push(i);
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, color: "var(--text-muted)", marginRight: 4 }}>
-          Showing {(page - 1) * LIMIT + 1}–{Math.min(page * LIMIT, total)} of {total.toLocaleString()} cases
-        </span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
-          <PBtn disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</PBtn>
-          {start > 1 && <><PBtn onClick={() => setPage(1)}>1</PBtn><span style={{ color: "var(--text-muted)" }}>…</span></>}
-          {pages.map(n => <PBtn key={n} active={n === page} onClick={() => setPage(n)}>{n}</PBtn>)}
-          {end < totalPages && <><span style={{ color: "var(--text-muted)" }}>…</span><PBtn onClick={() => setPage(totalPages)}>{totalPages}</PBtn></>}
-          <PBtn disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next →</PBtn>
-        </div>
-      </div>
-    );
-  };
+  // PaginationBar is now AdminPaginationBar defined at file scope (avoid nested component remount bug)
 
   return (
     <>
@@ -375,7 +356,7 @@ function CasesSection() {
                   ))}
                 </tbody>
               </table>
-              <PaginationBar />
+              <AdminPaginationBar page={page} totalPages={totalPages} total={total} limit={LIMIT} onPage={setPage} />
             </>
           )}
       </div>
@@ -597,17 +578,41 @@ function PaymentsSection() {
   );
 }
 
+// ── Standalone Pagination Bar (outside CasesSection to avoid React remount bug) ──
+function AdminPaginationBar({ page, totalPages, total, limit, onPage }) {
+  const pages = [];
+  const start = Math.max(1, page - 2);
+  const end = Math.min(totalPages, page + 2);
+  for (let i = start; i <= end; i++) pages.push(i);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+      <span style={{ fontSize: 12, color: "var(--text-muted)", marginRight: 4 }}>
+        Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of {total.toLocaleString()} cases
+      </span>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+        <PBtn disabled={page === 1} onClick={() => onPage(page - 1)}>← Prev</PBtn>
+        {start > 1 && <><PBtn onClick={() => onPage(1)}>1</PBtn><span style={{ color: "var(--text-muted)" }}>…</span></>}
+        {pages.map(n => <PBtn key={n} active={n === page} onClick={() => onPage(n)}>{n}</PBtn>)}
+        {end < totalPages && <><span style={{ color: "var(--text-muted)" }}>…</span><PBtn onClick={() => onPage(totalPages)}>{totalPages}</PBtn></>}
+        <PBtn disabled={page === totalPages} onClick={() => onPage(page + 1)}>Next →</PBtn>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Admin Dashboard ─────────────────────────────────
 export default function AdminDashboard() {
   const [activePage, setActivePage] = useState("overview");
   const [lawyers, setLawyers] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [caseCount, setCaseCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [toast, setToast] = useState(null);
   const navigate = useNavigate();
 
-  useEffect(() => { loadLawyers(); loadCustomerCount(); }, []);
+  useEffect(() => { loadLawyers(); loadCustomerCount(); loadCaseCount(); }, []);
 
   const loadLawyers = async () => {
     setLoading(true);
@@ -626,20 +631,29 @@ export default function AdminDashboard() {
     } catch {}
   };
 
+  const loadCaseCount = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/cases/count`);
+      const d = await r.json();
+      if (d.total !== undefined) setCaseCount(d.total);
+    } catch {}
+  };
+
   const handleVerify = async (id) => {
     try {
       const r = await fetch(`${API_URL}/api/lawyers/${id}/verify`, { method: "PUT" });
-      if (r.ok) { alert("Lawyer verified!"); loadLawyers(); }
-      else alert("Failed to verify");
-    } catch (e) { alert(e.message); }
+      if (r.ok) { setToast({ msg: "Lawyer verified successfully!", type: "success" }); loadLawyers(); }
+      else setToast({ msg: "Failed to verify lawyer", type: "error" });
+    } catch (e) { setToast({ msg: e.message || "Network error", type: "error" }); }
   };
 
   const handleReject = async (id) => {
-    if (!confirm("Reject this lawyer?")) return;
+    if (!window.confirm("Reject this lawyer?")) return;
     try {
       const r = await fetch(`${API_URL}/api/lawyers/${id}/reject`, { method: "PUT" });
-      if (r.ok) { alert("Lawyer rejected"); loadLawyers(); }
-    } catch (e) { alert(e.message); }
+      if (r.ok) { setToast({ msg: "Lawyer rejected", type: "success" }); loadLawyers(); }
+      else setToast({ msg: "Failed to reject lawyer", type: "error" });
+    } catch (e) { setToast({ msg: e.message || "Network error", type: "error" }); }
   };
 
   const handleLogout = () => { localStorage.removeItem("user"); localStorage.removeItem("token"); navigate("/"); };
@@ -667,12 +681,13 @@ export default function AdminDashboard() {
   const pageTitles = { overview: "Dashboard Overview", lawyers: "Lawyers Management", customers: "Customers Management", cases: "Cases Management", payments: "Payments" };
 
   const refreshPage = () => {
-    loadLawyers(); loadCustomerCount();
+    loadLawyers(); loadCustomerCount(); loadCaseCount();
   };
 
   return (
     <>
       <style>{styles}</style>
+      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
       <div className="admin-layout">
         <div className="sidebar">
           <div className="sidebar-logo">
@@ -707,7 +722,7 @@ export default function AdminDashboard() {
             {/* ── OVERVIEW ── */}
             {activePage === "overview" && (
               <>
-                <div className="stats-grid">
+                <div className="stats-grid" style={{ gridTemplateColumns: "repeat(5,1fr)" }}>
                   <div className="stat-card">
                     <div className="stat-icon blue">⚖️</div>
                     <div className="stat-num">{totalLawyers}</div>
@@ -727,6 +742,11 @@ export default function AdminDashboard() {
                     <div className="stat-icon green">👥</div>
                     <div className="stat-num">{customers.length}</div>
                     <div className="stat-label">Total Customers</div>
+                  </div>
+                  <div className="stat-card">
+                    <div className="stat-icon purple">📁</div>
+                    <div className="stat-num">{caseCount.toLocaleString()}</div>
+                    <div className="stat-label">Total Cases</div>
                   </div>
                 </div>
 

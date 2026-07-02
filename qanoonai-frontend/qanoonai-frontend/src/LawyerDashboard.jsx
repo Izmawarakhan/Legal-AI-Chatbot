@@ -885,7 +885,11 @@ function ProfilePage({ lawyerData, user, onUpdate }) {
       <div><label className="profile-label">Email</label><input className="profile-input" value={user?.email || ""} disabled style={{opacity:0.6}} /></div>
       <div><label className="profile-label">Specialization</label><select className="profile-input" value={form.specialization} onChange={e => setForm({...form, specialization: e.target.value})}><option>Family Law</option><option>Criminal Law</option><option>Civil Law</option><option>Banking Law</option><option>Corporate Law</option><option>Property Law</option></select></div>
       <div><label className="profile-label">Experience</label><input className="profile-input" type="number" value={form.experience_years} onChange={e => setForm({...form, experience_years: parseInt(e.target.value)||0})} /></div>
-      <div><label className="profile-label">Fee (Rs.)</label><input className="profile-input" type="number" value={form.consultation_fee} onChange={e => setForm({...form, consultation_fee: parseInt(e.target.value)||0})} /></div>
+      <div><label className="profile-label">Fee (Rs.)</label><input className="profile-input" type="number" value={form.consultation_fee} onChange={e => setForm({...form, consultation_fee: parseInt(e.target.value)||0})} disabled={form.is_free} style={{opacity: form.is_free ? 0.5 : 1}} /></div>
+      <div style={{display:"flex", alignItems:"center", gap:10, padding:"0.6rem 0.9rem", background:"var(--bg-dark)", border:"1px solid var(--border)", borderRadius:8}}>
+        <input type="checkbox" id="is-free-toggle" checked={form.is_free} onChange={e => setForm({...form, is_free: e.target.checked, consultation_fee: e.target.checked ? 0 : form.consultation_fee})} style={{accentColor:"var(--accent)", width:16, height:16, cursor:"pointer"}} />
+        <label htmlFor="is-free-toggle" style={{fontSize:"0.88rem", color:"var(--text-secondary)", cursor:"pointer"}}>Offer free consultations <span style={{color:"var(--text-muted)", fontSize:"0.78rem"}}>(waives your fee)</span></label>
+      </div>
       <div className="profile-full"><label className="profile-label">About</label><textarea className="profile-input" rows={3} value={form.about} onChange={e => setForm({...form, about: e.target.value})} placeholder="About you..." style={{resize:"vertical"}} /></div>
     </div><button className="save-btn" onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</button>
   </div>);
@@ -897,7 +901,17 @@ export default function LawyerDashboard() {
   const user = JSON.parse(localStorage.getItem("user") || '{"name":"Lawyer","role":"lawyer"}');
   useEffect(() => { loadProfile(); }, []);
 
-  const loadProfile = async () => { setLoading(true); try { const r = await fetch(`${API_URL}/api/lawyers/all`); const d = await r.json(); if (d.lawyers) { const me = d.lawyers.find(l => l.email === user.email); if (me) setLawyerData(me); } } catch {} finally { setLoading(false); } };
+  const loadProfile = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/lawyers/all`);
+      const d = await r.json();
+      if (d.lawyers) {
+        const me = d.lawyers.find(l => l.email === user.email);
+        if (me) setLawyerData(me);
+      }
+    } catch {} finally { setLoading(false); }
+  };
   
   useEffect(() => {
     const check = async () => { try { const r = await fetch(`${API_URL}/api/chats/user/${user.id}?role=lawyer`); const d = await r.json(); if (d.chats) setUnreadChats(d.chats.reduce((s,c) => s + (c.unread||0), 0)); } catch {} };
