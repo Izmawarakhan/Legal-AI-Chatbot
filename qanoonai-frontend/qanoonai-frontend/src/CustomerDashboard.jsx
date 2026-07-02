@@ -62,9 +62,16 @@ function MyChatsPage() {
   };
 
   const openChat = async (c) => {
-    // Derive E2EE key from chat_id — same key computed by lawyer side
-    chatKeyRef.current = await deriveKeyFromChatId(c.id);
+    // Show chat window immediately — don't block on async key derivation
+    chatKeyRef.current = null;
     setActiveChat(c);
+    setMessages([]);
+    // Derive E2EE key; if it fails, messages still display as fallback text
+    try {
+      chatKeyRef.current = await deriveKeyFromChatId(c.id);
+    } catch (err) {
+      console.error("E2EE key derivation failed:", err);
+    }
     loadMsgs(c.id);
   };
 
@@ -72,17 +79,22 @@ function MyChatsPage() {
     try {
       const r = await fetch(`${API_URL}/api/chats/${id}`);
       const d = await r.json();
-      if (d.messages && chatKeyRef.current) {
-        // Decrypt each message using the session key
-        const decrypted = d.messages.map(m => ({
-          ...m,
-          message: decryptMessage(m.message, chatKeyRef.current),
-        }));
-        setMessages(decrypted);
-      } else if (d.messages) {
-        setMessages(d.messages);
-      }
-    } catch { }
+      if (!d.messages) return;
+      const key = chatKeyRef.current;
+      const processed = d.messages.map(m => {
+        let text = m.message || "";
+        try {
+          text = decryptMessage(text, key);
+        } catch (err) {
+          console.error("Decrypt failed for message:", err);
+          text = text.startsWith("e2ee:") ? "🔒 Encrypted message" : text;
+        }
+        return { ...m, message: text };
+      });
+      setMessages(processed);
+    } catch (err) {
+      console.error("loadMsgs failed:", err);
+    }
   };
 
   const sendMsg = async () => {

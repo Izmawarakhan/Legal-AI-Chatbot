@@ -303,18 +303,24 @@ function LawyerChatsPage() {
     try {
       const r = await fetch(`${API_URL}/api/chats/${id}`);
       const d = await r.json();
-      if (d.messages && chatKeyRef.current) {
-        const decrypted = d.messages.map(m => ({ ...m, message: decryptMessage(m.message, chatKeyRef.current) }));
-        setMessages(decrypted);
-      } else if (d.messages) {
-        setMessages(d.messages);
-      }
-    } catch {}
+      if (!d.messages) return;
+      const key = chatKeyRef.current;
+      const processed = d.messages.map(m => {
+        let text = m.message || "";
+        try { text = decryptMessage(text, key); }
+        catch (err) { console.error("Decrypt failed:", err); text = text.startsWith("e2ee:") ? "🔒 Encrypted message" : text; }
+        return { ...m, message: text };
+      });
+      setMessages(processed);
+    } catch (err) { console.error("loadMessages failed:", err); }
   };
 
   const openChat = async (c) => {
-    chatKeyRef.current = await deriveKeyFromChatId(c.id);
+    chatKeyRef.current = null;
     setActiveChat(c);
+    setMessages([]);
+    try { chatKeyRef.current = await deriveKeyFromChatId(c.id); }
+    catch (err) { console.error("E2EE key derivation failed:", err); }
     loadMessages(c.id);
   };
 
