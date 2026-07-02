@@ -60,6 +60,45 @@ async def get_all_cases(category: str = None, search: str = None):
     return {"total": len(cases), "cases": cases}
 
 
+@router.get("/search")
+async def search_cases(q: str = ""):
+    """
+    Keyword-based case search — matches title, citation, summary, judge, court
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    if not q.strip():
+        return {"total": 0, "cases": []}
+
+    query = {
+        "$or": [
+            {"title": {"$regex": q, "$options": "i"}},
+            {"citation": {"$regex": q, "$options": "i"}},
+            {"summary": {"$regex": q, "$options": "i"}},
+            {"judge": {"$regex": q, "$options": "i"}},
+            {"court": {"$regex": q, "$options": "i"}},
+            {"category": {"$regex": q, "$options": "i"}},
+        ]
+    }
+
+    cases = []
+    for case in db.past_cases.find(query):
+        cases.append({
+            "id": str(case["_id"]),
+            "title": case.get("title"),
+            "citation": case.get("citation"),
+            "category": case.get("category"),
+            "summary": case.get("summary"),
+            "court": case.get("court"),
+            "year": case.get("year"),
+            "judge": case.get("judge", "")
+        })
+
+    return {"total": len(cases), "cases": cases}
+
+
 @router.get("/{case_id}")
 async def get_case(case_id: str):
     """

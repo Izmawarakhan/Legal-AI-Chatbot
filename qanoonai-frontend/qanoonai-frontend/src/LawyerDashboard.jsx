@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8001";
+const CHATBOT_URL = import.meta.env.VITE_CHATBOT_URL || "https://chatbot.creoation.com";
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap');
@@ -134,18 +135,56 @@ function OverviewPage({ lawyerData }) {
 }
 
 function PastCasesPage() {
-  const [cases, setCases] = useState([]); const [loading, setLoading] = useState(true); const [search, setSearch] = useState(""); const [category, setCategory] = useState("All"); const [selectedCase, setSelectedCase] = useState(null); const [caseDetail, setCaseDetail] = useState(null);
+  const [allCases, setAllCases] = useState([]); const [cases, setCases] = useState([]); const [loading, setLoading] = useState(true); const [search, setSearch] = useState(""); const [category, setCategory] = useState("All"); const [selectedCase, setSelectedCase] = useState(null); const [caseDetail, setCaseDetail] = useState(null);
   const cats = ["All", "Family Law", "Criminal Law", "Tax Law", "Banking Law", "Property Law", "Constitutional Law", "Civil Law"];
+
   useEffect(() => { loadCases(); }, []);
-  const loadCases = async () => { setLoading(true); try { const r = await fetch(`${API_URL}/api/cases/`); const d = await r.json(); if (d.cases) setCases(d.cases); } catch {} finally { setLoading(false); } };
-  const searchCases = async () => { setLoading(true); try { let u = `${API_URL}/api/cases/?`; if (search) u += `search=${encodeURIComponent(search)}&`; if (category !== "All") u += `category=${encodeURIComponent(category)}`; const r = await fetch(u); const d = await r.json(); if (d.cases) setCases(d.cases); } catch {} finally { setLoading(false); } };
-  useEffect(() => { searchCases(); }, [category]);
+
+  const loadCases = async () => {
+    setLoading(true);
+    try { const r = await fetch(`${API_URL}/api/cases/`); const d = await r.json(); if (d.cases) { setAllCases(d.cases); setCases(d.cases); } }
+    catch {} finally { setLoading(false); }
+  };
+
+  const applyFilters = (q, cat, data) => {
+    let filtered = data || allCases;
+    if (cat && cat !== "All") filtered = filtered.filter(c => c.category === cat);
+    if (q && q.trim()) {
+      const term = q.toLowerCase();
+      filtered = filtered.filter(c =>
+        (c.title || "").toLowerCase().includes(term) ||
+        (c.citation || "").toLowerCase().includes(term) ||
+        (c.summary || "").toLowerCase().includes(term) ||
+        (c.court || "").toLowerCase().includes(term) ||
+        (c.judge || "").toLowerCase().includes(term)
+      );
+    }
+    setCases(filtered);
+  };
+
+  const handleSearchChange = (e) => { setSearch(e.target.value); applyFilters(e.target.value, category); };
+  const handleCategoryChange = (cat) => { setCategory(cat); applyFilters(search, cat); };
+
+  const keywordSearch = async () => {
+    if (!search.trim()) { applyFilters("", category); return; }
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/cases/search?q=${encodeURIComponent(search)}`);
+      const d = await r.json();
+      if (d.cases) {
+        const filtered = category !== "All" ? d.cases.filter(c => c.category === category) : d.cases;
+        setCases(filtered);
+      }
+    } catch { applyFilters(search, category); }
+    finally { setLoading(false); }
+  };
+
   const openCase = async (c) => { setSelectedCase(c); try { const r = await fetch(`${API_URL}/api/cases/${c.id}`); const d = await r.json(); setCaseDetail(d); } catch { setCaseDetail(c); } };
 
   return (<>
     <div className="research-hero"><h2>📚 Legal Research Database</h2><p>Access Pakistani case laws and precedents</p>
-      <div className="search-big"><input placeholder="Search cases..." value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === "Enter" && searchCases()} /><button onClick={searchCases}>🔍 Search</button></div>
-      <div className="chip-row">{cats.map(c => (<button key={c} className={`chip ${category === c ? "active" : ""}`} onClick={() => setCategory(c)}>{c}</button>))}</div>
+      <div className="search-big"><input placeholder="Search cases by keyword..." value={search} onChange={handleSearchChange} onKeyDown={e => e.key === "Enter" && keywordSearch()} /><button onClick={keywordSearch}>🔍 Search</button></div>
+      <div className="chip-row">{cats.map(c => (<button key={c} className={`chip ${category === c ? "active" : ""}`} onClick={() => handleCategoryChange(c)}>{c}</button>))}</div>
     </div>
     {loading ? <div className="loading">⏳ Loading...</div> : cases.length === 0 ? <div className="empty">📚 No cases found</div> : <>
       <div style={{color:"var(--text-secondary)", fontSize:"0.88rem", marginBottom:"1rem"}}>Showing {cases.length} results</div>
@@ -195,6 +234,94 @@ function LawyerChatsPage() {
   );
 }
 
+function AIChatbotPage() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
+  const [category, setCategory] = useState("Family Law");
+  const scrollRef = useRef(null);
+  const cats = ["Family Law", "Criminal Law", "Labour Laws", "Land & Property Laws", "Islamic Religious Laws", "Excise Taxation Laws", "Health & Medical Laws"];
+
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg = input.trim();
+    setInput("");
+    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
+    setLoading(true);
+    try {
+      const res = await fetch(`${CHATBOT_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        body: JSON.stringify({ message: userMsg, session_id: sessionId, category, religion: "Muslim" })
+      });
+      const data = await res.json();
+      if (data.reply) {
+        setMessages(prev => [...prev, { role: "assistant", content: data.reply, sources: data.sources || [] }]);
+        if (data.session_id) setSessionId(data.session_id);
+      }
+    } catch { setMessages(prev => [...prev, { role: "assistant", content: "Error connecting to AI. Please try again." }]); }
+    finally { setLoading(false); }
+  };
+
+  const clearChat = () => { setMessages([]); setSessionId(null); };
+
+  return (
+    <div style={{display:"flex", flexDirection:"column", height:"calc(100vh - 120px)"}}>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"1rem", gap:"1rem", flexWrap:"wrap"}}>
+        <div style={{display:"flex", gap:"8px", flexWrap:"wrap"}}>
+          {cats.map(c => (<button key={c} className={`chip ${category === c ? "active" : ""}`} onClick={() => setCategory(c)} style={{fontSize:"0.72rem"}}>{c}</button>))}
+        </div>
+        <button onClick={clearChat} style={{padding:"0.4rem 1rem", background:"rgba(224,85,85,0.1)", border:"1px solid rgba(224,85,85,0.3)", color:"var(--danger)", borderRadius:8, fontSize:"0.8rem", cursor:"pointer", fontFamily:"var(--font-body)", whiteSpace:"nowrap"}}>🗑 New Chat</button>
+      </div>
+      <div className="card" style={{flex:1, display:"flex", flexDirection:"column", padding:0, overflow:"hidden", marginBottom:0}}>
+        <div ref={scrollRef} style={{flex:1, overflowY:"auto", padding:"1.5rem", display:"flex", flexDirection:"column", gap:"1rem"}}>
+          {messages.length === 0 && (
+            <div style={{margin:"auto", textAlign:"center", color:"var(--text-muted)"}}>
+              <div style={{fontSize:48, marginBottom:"0.8rem"}}>⚖️</div>
+              <div style={{fontFamily:"var(--font-display)", fontSize:"1.1rem", fontWeight:600, marginBottom:"0.4rem", color:"var(--text-secondary)"}}>AI Legal Assistant</div>
+              <div style={{fontSize:"0.85rem"}}>Select a law category above, then ask your legal question.</div>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} style={{display:"flex", flexDirection:"column", alignItems: m.role === "user" ? "flex-end" : "flex-start"}}>
+              <div style={{maxWidth:"75%", padding:"0.8rem 1.1rem", borderRadius: m.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px", background: m.role === "user" ? "rgba(0,196,180,0.15)" : "var(--bg-card2)", border: m.role === "user" ? "1px solid rgba(0,196,180,0.25)" : "1px solid var(--border)", fontSize:"0.88rem", lineHeight:1.6, color: m.role === "user" ? "var(--text-primary)" : "var(--text-secondary)", whiteSpace:"pre-wrap"}}>
+                {m.content}
+              </div>
+              {m.sources && m.sources.length > 0 && (
+                <div style={{maxWidth:"75%", marginTop:"4px", display:"flex", flexWrap:"wrap", gap:"4px"}}>
+                  {m.sources.slice(0,3).map((s,j) => (<span key={j} style={{fontSize:"0.65rem", padding:"2px 8px", background:"rgba(0,196,180,0.08)", border:"1px solid rgba(0,196,180,0.15)", borderRadius:100, color:"var(--accent)"}}>{s}</span>))}
+                </div>
+              )}
+            </div>
+          ))}
+          {loading && (
+            <div style={{alignSelf:"flex-start", padding:"0.8rem 1.1rem", background:"var(--bg-card2)", border:"1px solid var(--border)", borderRadius:"14px 14px 14px 4px", color:"var(--accent)", fontSize:"0.85rem"}}>
+              ⏳ Thinking...
+            </div>
+          )}
+        </div>
+        <div style={{padding:"1rem 1.5rem", borderTop:"1px solid var(--border)", display:"flex", gap:"8px"}}>
+          <input
+            style={{flex:1, background:"var(--bg-dark)", border:"1px solid var(--border)", borderRadius:10, padding:"0.75rem 1rem", color:"var(--text-primary)", fontSize:"0.88rem", fontFamily:"var(--font-body)", outline:"none"}}
+            placeholder={`Ask a ${category} question...`}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
+            onFocus={e => e.target.style.borderColor = "var(--accent)"}
+            onBlur={e => e.target.style.borderColor = "rgba(0,196,180,0.15)"}
+          />
+          <button onClick={sendMessage} disabled={loading || !input.trim()} style={{padding:"0.75rem 1.5rem", background: loading || !input.trim() ? "rgba(0,196,180,0.3)" : "var(--accent)", color:"#08141e", border:"none", borderRadius:10, fontWeight:600, cursor: loading || !input.trim() ? "not-allowed" : "pointer", fontFamily:"var(--font-body)", fontSize:"0.9rem"}}>
+            {loading ? "..." : "Send ➤"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProfilePage({ lawyerData, user, onUpdate }) {
   const [form, setForm] = useState({ specialization: lawyerData?.specialization || "", experience_years: lawyerData?.experience_years || 0, consultation_fee: lawyerData?.consultation_fee || 0, about: lawyerData?.about || "", is_free: lawyerData?.is_free || false });
   const [saving, setSaving] = useState(false); const [message, setMessage] = useState("");
@@ -228,8 +355,8 @@ export default function LawyerDashboard() {
 
   const handleLogout = () => { localStorage.removeItem("user"); localStorage.removeItem("token"); navigate("/"); };
   const getInitials = (n) => { if (!n) return "L"; const p = n.split(" "); return p.length >= 2 ? (p[0][0]+p[1][0]).toUpperCase() : n[0].toUpperCase(); };
-  const navItems = [ { id: "overview", icon: "📊", label: "Overview" }, { id: "cases", icon: "📚", label: "Past Cases" }, { id: "chats", icon: "💬", label: "Chats", badge: unreadChats }, { id: "profile", icon: "👤", label: "Profile" } ];
-  const pageTitles = { overview: "Dashboard", cases: "Past Cases", chats: "Client Chats", profile: "My Profile" };
+  const navItems = [ { id: "overview", icon: "📊", label: "Overview" }, { id: "cases", icon: "📚", label: "Past Cases" }, { id: "chatbot", icon: "🤖", label: "AI Assistant" }, { id: "chats", icon: "💬", label: "Chats", badge: unreadChats }, { id: "profile", icon: "👤", label: "Profile" } ];
+  const pageTitles = { overview: "Dashboard", cases: "Past Cases", chatbot: "AI Legal Assistant", chats: "Client Chats", profile: "My Profile" };
 
   if (loading) return <><style>{styles}</style><div style={{minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--bg-main)", color:"var(--text-secondary)"}}>⏳ Loading...</div></>;
 
@@ -245,6 +372,7 @@ export default function LawyerDashboard() {
         <div className="l-page">
           {activePage === "overview" && <OverviewPage lawyerData={lawyerData} />}
           {activePage === "cases" && <PastCasesPage />}
+          {activePage === "chatbot" && <AIChatbotPage />}
           {activePage === "chats" && <LawyerChatsPage />}
           {activePage === "profile" && <ProfilePage lawyerData={lawyerData} user={user} onUpdate={loadProfile} />}
         </div>
