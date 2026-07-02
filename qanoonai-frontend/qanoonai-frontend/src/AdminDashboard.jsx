@@ -154,90 +154,344 @@ function CustomersSection() {
   );
 }
 
+// ── Toast ─────────────────────────────────────────────────
+function Toast({ msg, type, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, []);
+  if (!msg) return null;
+  const bg = type === "error" ? "rgba(224,85,85,0.15)" : "rgba(0,196,180,0.15)";
+  const border = type === "error" ? "rgba(224,85,85,0.4)" : "rgba(0,196,180,0.4)";
+  const color = type === "error" ? "#e05555" : "#00c4b4";
+  return (
+    <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1000, padding: "12px 20px", background: bg, border: `1px solid ${border}`, borderRadius: 10, color, fontFamily: "var(--font-body)", fontSize: 14, fontWeight: 500, boxShadow: "0 8px 24px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", gap: 10 }}>
+      {type === "error" ? "❌" : "✅"} {msg}
+      <button onClick={onClose} style={{ background: "none", border: "none", color, cursor: "pointer", fontSize: 16, lineHeight: 1 }}>×</button>
+    </div>
+  );
+}
+
+// ── Modal shell ───────────────────────────────────────────
+function Modal({ title, onClose, children }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 16, width: "100%", maxWidth: 680, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>{title}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: 20, flex: 1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+const inp = { background: "var(--bg-dark)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", color: "var(--text-primary)", fontSize: 13, fontFamily: "var(--font-body)", outline: "none", width: "100%" };
+const lbl = { fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 4 };
+const row2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 };
+
 // ── Cases Section ────────────────────────────────────────
 function CasesSection() {
   const [cases, setCases] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("All");
-  const [cats, setCats] = useState(["All"]);
+  const [cats, setCats] = useState([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const LIMIT = 20;
 
-  useEffect(() => { load(); }, []);
+  // Case add modal
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState(null);
+  const emptyForm = { title: "", summary: "", citation: "", category: "", court: "", year: "", judge: "", full_judgment: "", case_number: "", keywords: "", status: "active" };
+  const [form, setForm] = useState(emptyForm);
 
-  const load = async () => {
+  // Category management modal
+  const [showCatMgr, setShowCatMgr] = useState(false);
+  const [catForm, setCatForm] = useState({ name: "", description: "", icon: "" });
+  const [savingCat, setSavingCat] = useState(false);
+  const [managedCats, setManagedCats] = useState([]);
+
+  // Count by category
+  const [catStats, setCatStats] = useState({});
+
+  useEffect(() => { loadCats(); loadStats(); }, []);
+  useEffect(() => { load(page, catFilter, search); }, [page, catFilter]);
+
+  const loadStats = async () => {
+    try { const r = await fetch(`${API_URL}/api/cases/count`); const d = await r.json(); setCatStats(d.by_category || {}); } catch {}
+  };
+
+  const loadCats = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/cases/categories`);
+      const d = await r.json();
+      if (d.categories) { setManagedCats(d.categories); setCats(["All", ...d.categories.map(c => c.name)]); }
+    } catch {}
+  };
+
+  const load = async (pg = 1, cat = catFilter, q = search) => {
     setLoading(true);
     try {
-      const r = await fetch(`${API_URL}/api/cases/`);
+      const params = new URLSearchParams({ page: pg, limit: LIMIT });
+      if (cat && cat !== "All") params.set("category", cat);
+      if (q) params.set("search", q);
+      const r = await fetch(`${API_URL}/api/cases/?${params}`);
       const d = await r.json();
-      if (d.cases) {
-        setCases(d.cases);
-        const uniqueCats = ["All", ...Array.from(new Set(d.cases.map(c => c.category).filter(Boolean))).sort()];
-        setCats(uniqueCats);
-      }
+      if (d.cases) { setCases(d.cases); setTotal(d.total); setTotalPages(d.total_pages || 1); }
     } catch {} finally { setLoading(false); }
   };
 
-  const filtered = cases.filter(c => {
-    const matchCat = catFilter === "All" || c.category === catFilter;
-    const term = search.toLowerCase();
-    const matchSearch = !term ||
-      (c.title || "").toLowerCase().includes(term) ||
-      (c.citation || "").toLowerCase().includes(term) ||
-      (c.court || "").toLowerCase().includes(term) ||
-      (c.judge || "").toLowerCase().includes(term) ||
-      String(c.year || "").includes(term);
-    return matchCat && matchSearch;
-  });
+  const handleSearch = () => { setPage(1); load(1, catFilter, search); };
 
-  return (
-    <div className="full-table-card">
-      <div className="full-table-header">
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>
-          📁 Case Law Database ({cases.length} total)
-        </div>
-        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-          <input className="search-input" placeholder="Search title, citation, court..." value={search} onChange={e => setSearch(e.target.value)} />
-          <select className="filter-select" value={catFilter} onChange={e => setCatFilter(e.target.value)}>
-            {cats.map(c => <option key={c}>{c}</option>)}
-          </select>
-          <button className="refresh-btn" onClick={load}>🔄</button>
+  const handleCatChange = (c) => { setCatFilter(c); setPage(1); };
+
+  const saveCase = async () => {
+    if (!form.title.trim() || !form.category.trim()) { setToast({ msg: "Title and Category are required.", type: "error" }); return; }
+    setSaving(true);
+    try {
+      const r = await fetch(`${API_URL}/api/cases/`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` }, body: JSON.stringify({ ...form, year: form.year ? parseInt(form.year) : 0 }) });
+      const d = await r.json();
+      if (r.ok) { setToast({ msg: "Case added successfully!", type: "success" }); setShowAdd(false); setForm(emptyForm); load(1, catFilter, search); loadStats(); }
+      else setToast({ msg: d.detail || "Failed to add case", type: "error" });
+    } catch { setToast({ msg: "Network error", type: "error" }); }
+    finally { setSaving(false); }
+  };
+
+  const saveCat = async () => {
+    if (!catForm.name.trim()) { setToast({ msg: "Category name is required.", type: "error" }); return; }
+    setSavingCat(true);
+    try {
+      const r = await fetch(`${API_URL}/api/cases/categories`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` }, body: JSON.stringify(catForm) });
+      const d = await r.json();
+      if (r.ok) { setToast({ msg: "Category added!", type: "success" }); setCatForm({ name: "", description: "", icon: "" }); loadCats(); setCats(prev => [...prev, catForm.name]); }
+      else setToast({ msg: d.detail || "Failed", type: "error" });
+    } catch { setToast({ msg: "Network error", type: "error" }); }
+    finally { setSavingCat(false); }
+  };
+
+  const deleteCat = async (id, name) => {
+    if (!id) { setToast({ msg: "Cannot delete derived category (no separate record)", type: "error" }); return; }
+    if (!confirm(`Delete category "${name}"?`)) return;
+    try {
+      const r = await fetch(`${API_URL}/api/cases/categories/${id}`, { method: "DELETE", headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` } });
+      if (r.ok) { setToast({ msg: "Category deleted", type: "success" }); loadCats(); }
+      else setToast({ msg: "Failed to delete", type: "error" });
+    } catch { setToast({ msg: "Network error", type: "error" }); }
+  };
+
+  const deleteCase = async (id) => {
+    if (!confirm("Delete this case?")) return;
+    try {
+      const r = await fetch(`${API_URL}/api/cases/${id}`, { method: "DELETE", headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` } });
+      if (r.ok) { setToast({ msg: "Case deleted", type: "success" }); load(page, catFilter, search); loadStats(); }
+      else setToast({ msg: "Failed to delete", type: "error" });
+    } catch {}
+  };
+
+  const PaginationBar = () => {
+    const pages = [];
+    const start = Math.max(1, page - 2);
+    const end = Math.min(totalPages, page + 2);
+    for (let i = start; i <= end; i++) pages.push(i);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "var(--text-muted)", marginRight: 4 }}>
+          Showing {(page - 1) * LIMIT + 1}–{Math.min(page * LIMIT, total)} of {total.toLocaleString()} cases
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+          <PBtn disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</PBtn>
+          {start > 1 && <><PBtn onClick={() => setPage(1)}>1</PBtn><span style={{ color: "var(--text-muted)" }}>…</span></>}
+          {pages.map(n => <PBtn key={n} active={n === page} onClick={() => setPage(n)}>{n}</PBtn>)}
+          {end < totalPages && <><span style={{ color: "var(--text-muted)" }}>…</span><PBtn onClick={() => setPage(totalPages)}>{totalPages}</PBtn></>}
+          <PBtn disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next →</PBtn>
         </div>
       </div>
-      {loading ? <div className="loading">⏳ Loading cases...</div>
-        : filtered.length === 0 ? <div className="empty">No cases found</div>
-        : (
-          <>
-            <div style={{ padding: "0.5rem 1.5rem", fontSize: "0.78rem", color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }}>
-              Showing {filtered.length} of {cases.length} cases
-            </div>
-            <table>
-              <thead>
-                <tr><th>Title</th><th>Citation</th><th>Category</th><th>Court</th><th>Year</th></tr>
-              </thead>
-              <tbody>
-                {filtered.slice(0, 200).map(c => (
-                  <tr key={c.id}>
-                    <td style={{ maxWidth: 300 }}>
-                      <div style={{ fontWeight: 500, color: "var(--text-primary)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 280 }} title={c.title}>
-                        {c.title || "—"}
-                      </div>
-                    </td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>{c.citation || "—"}</td>
-                    <td><span className="badge pending">{c.category || "—"}</span></td>
-                    <td style={{ fontSize: "0.78rem" }}>{c.court || "—"}</td>
-                    <td>{c.year || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {filtered.length > 200 && (
-              <div style={{ padding: "0.8rem 1.5rem", fontSize: "0.78rem", color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
-                Showing first 200 results. Use search to narrow down.
+    );
+  };
+
+  return (
+    <>
+      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Category Stats */}
+      {Object.keys(catStats).length > 0 && (
+        <div className="full-table-card" style={{ marginBottom: "1rem" }}>
+          <div className="full-table-header">
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>📊 Cases by Category</div>
+          </div>
+          <div style={{ padding: "12px 20px", display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {Object.entries(catStats).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
+              <div key={cat} style={{ padding: "6px 12px", background: "var(--bg-card2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}>
+                <span style={{ color: "var(--text-secondary)" }}>{cat}</span>
+                <span style={{ marginLeft: 8, background: "rgba(0,196,180,0.15)", color: "var(--accent)", borderRadius: 100, padding: "1px 8px", fontWeight: 600 }}>{count}</span>
               </div>
-            )}
-          </>
-        )}
-    </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cases table */}
+      <div className="full-table-card">
+        <div className="full-table-header">
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>
+            📁 Case Law Database ({total.toLocaleString()} total)
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+            <input className="search-input" placeholder="Search title, citation, court..." value={search}
+              onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSearch()} />
+            <select className="filter-select" value={catFilter} onChange={e => handleCatChange(e.target.value)}>
+              <option value="All">All Categories</option>
+              {cats.filter(c => c !== "All").map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button className="refresh-btn" onClick={handleSearch}>🔍</button>
+            <button className="refresh-btn" onClick={() => { load(page); loadStats(); }}>🔄</button>
+            <button onClick={() => setShowCatMgr(true)} style={{ padding: "6px 14px", background: "rgba(0,196,180,0.1)", border: "1px solid rgba(0,196,180,0.3)", borderRadius: 8, color: "var(--accent)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--font-body)" }}>🗂 Categories</button>
+            <button onClick={() => setShowAdd(true)} style={{ padding: "6px 14px", background: "var(--accent)", border: "none", borderRadius: 8, color: "#08141e", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "var(--font-body)" }}>+ Add Case</button>
+          </div>
+        </div>
+
+        {loading ? <div className="loading">⏳ Loading cases...</div>
+          : cases.length === 0 ? <div className="empty">No cases found</div>
+          : (
+            <>
+              <table>
+                <thead><tr><th>Title</th><th>Citation</th><th>Category</th><th>Court</th><th>Year</th><th>Action</th></tr></thead>
+                <tbody>
+                  {cases.map(c => (
+                    <tr key={c.id}>
+                      <td style={{ maxWidth: 260 }}>
+                        <div style={{ fontWeight: 500, color: "var(--text-primary)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 250 }} title={c.title}>{c.title || "—"}</div>
+                      </td>
+                      <td style={{ fontFamily: "monospace", fontSize: "0.72rem" }}>{c.citation || "—"}</td>
+                      <td><span className="badge pending" style={{ fontSize: 11 }}>{c.category || "—"}</span></td>
+                      <td style={{ fontSize: "0.78rem" }}>{c.court || "—"}</td>
+                      <td>{c.year || "—"}</td>
+                      <td>
+                        <button onClick={() => deleteCase(c.id)} className="act-btn reject" title="Delete case">🗑</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PaginationBar />
+            </>
+          )}
+      </div>
+
+      {/* Add Case Modal */}
+      {showAdd && (
+        <Modal title="📁 Add New Case" onClose={() => setShowAdd(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label style={lbl}>Case Title <span style={{ color: "var(--danger)" }}>*</span></label>
+              <input style={inp} value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="Full case title" />
+            </div>
+            <div style={row2}>
+              <div>
+                <label style={lbl}>Category <span style={{ color: "var(--danger)" }}>*</span></label>
+                <select style={inp} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+                  <option value="">— Select —</option>
+                  {cats.filter(c => c !== "All").map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>Status</label>
+                <select style={inp} value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>Summary / Description <span style={{ color: "var(--danger)" }}>*</span></label>
+              <textarea style={{ ...inp, height: 90, resize: "vertical" }} value={form.summary} onChange={e => setForm(f => ({ ...f, summary: e.target.value }))} placeholder="Brief description of the case" />
+            </div>
+            <div style={row2}>
+              <div>
+                <label style={lbl}>Citation</label>
+                <input style={inp} value={form.citation} onChange={e => setForm(f => ({ ...f, citation: e.target.value }))} placeholder="e.g. PLD 2021 SC 123" />
+              </div>
+              <div>
+                <label style={lbl}>Case Number</label>
+                <input style={inp} value={form.case_number} onChange={e => setForm(f => ({ ...f, case_number: e.target.value }))} placeholder="e.g. C.P. 442/2021" />
+              </div>
+            </div>
+            <div style={row2}>
+              <div>
+                <label style={lbl}>Court</label>
+                <input style={inp} value={form.court} onChange={e => setForm(f => ({ ...f, court: e.target.value }))} placeholder="e.g. Supreme Court of Pakistan" />
+              </div>
+              <div>
+                <label style={lbl}>Year</label>
+                <input style={inp} type="number" value={form.year} onChange={e => setForm(f => ({ ...f, year: e.target.value }))} placeholder="e.g. 2021" min="1947" max="2030" />
+              </div>
+            </div>
+            <div style={row2}>
+              <div>
+                <label style={lbl}>Judge</label>
+                <input style={inp} value={form.judge} onChange={e => setForm(f => ({ ...f, judge: e.target.value }))} placeholder="Presiding judge name" />
+              </div>
+              <div>
+                <label style={lbl}>Keywords (comma-separated)</label>
+                <input style={inp} value={form.keywords} onChange={e => setForm(f => ({ ...f, keywords: e.target.value }))} placeholder="e.g. divorce, custody, meher" />
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>Full Judgment / Case Content</label>
+              <textarea style={{ ...inp, height: 130, resize: "vertical" }} value={form.full_judgment} onChange={e => setForm(f => ({ ...f, full_judgment: e.target.value }))} placeholder="Paste the full judgment text here (optional)" />
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", paddingTop: 4 }}>
+              <button onClick={() => setShowAdd(false)} style={{ padding: "8px 20px", background: "var(--bg-dark)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer", fontFamily: "var(--font-body)", fontSize: 13 }}>Cancel</button>
+              <button onClick={saveCase} disabled={saving} style={{ padding: "8px 24px", background: saving ? "rgba(0,196,180,0.4)" : "var(--accent)", border: "none", borderRadius: 8, color: "#08141e", fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: "var(--font-body)", fontSize: 13 }}>{saving ? "Saving..." : "💾 Save Case"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Category Management Modal */}
+      {showCatMgr && (
+        <Modal title="🗂 Category Management" onClose={() => setShowCatMgr(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {/* Add category form */}
+            <div style={{ background: "var(--bg-card2)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
+              <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 13 }}>+ Add New Category</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 10, marginBottom: 10 }}>
+                <input style={inp} placeholder="Category name (e.g. Tax Law)" value={catForm.name} onChange={e => setCatForm(f => ({ ...f, name: e.target.value }))} />
+                <input style={inp} placeholder="Icon" value={catForm.icon} onChange={e => setCatForm(f => ({ ...f, icon: e.target.value }))} />
+              </div>
+              <input style={{ ...inp, marginBottom: 10 }} placeholder="Description (optional)" value={catForm.description} onChange={e => setCatForm(f => ({ ...f, description: e.target.value }))} />
+              <button onClick={saveCat} disabled={savingCat} style={{ padding: "7px 18px", background: "var(--accent)", border: "none", borderRadius: 8, color: "#08141e", fontWeight: 700, cursor: savingCat ? "not-allowed" : "pointer", fontFamily: "var(--font-body)", fontSize: 13 }}>{savingCat ? "Saving..." : "Add Category"}</button>
+            </div>
+
+            {/* Existing categories */}
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>Existing Categories ({managedCats.length})</div>
+              {managedCats.length === 0 ? <div style={{ color: "var(--text-muted)", fontSize: 13 }}>No categories yet. Categories are auto-derived from cases.</div>
+                : <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {managedCats.map(c => (
+                      <div key={c.id || c.name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "var(--bg-card2)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                        {c.icon && <span>{c.icon}</span>}
+                        <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{c.name}</span>
+                        {catStats[c.name] && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({catStats[c.name]})</span>}
+                        {c.id && <button onClick={() => deleteCat(c.id, c.name)} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 14, lineHeight: 1, opacity: 0.6, padding: "0 2px" }} onMouseEnter={e => e.target.style.opacity = "1"} onMouseLeave={e => e.target.style.opacity = "0.6"}>×</button>}
+                      </div>
+                    ))}
+                  </div>}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function PBtn({ children, disabled, active, onClick }) {
+  return (
+    <button onClick={onClick} disabled={disabled} style={{ padding: "4px 10px", background: active ? "var(--accent)" : "var(--bg-card2)", border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`, borderRadius: 6, color: active ? "#08141e" : disabled ? "var(--text-muted)" : "var(--text-secondary)", fontFamily: "var(--font-body)", fontSize: 12, cursor: disabled ? "not-allowed" : "pointer", fontWeight: active ? 700 : 400, transition: "all 0.15s" }}>
+      {children}
+    </button>
   );
 }
 

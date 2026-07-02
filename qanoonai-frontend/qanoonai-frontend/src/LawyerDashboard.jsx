@@ -135,88 +135,142 @@ function OverviewPage({ lawyerData }) {
   </>);
 }
 
+function PCPaginationBar({ page, totalPages, total, limit, onPage }) {
+  const pages = [];
+  const start = Math.max(1, page - 2);
+  const end = Math.min(totalPages, page + 2);
+  for (let i = start; i <= end; i++) pages.push(i);
+  const btnStyle = (active, disabled) => ({
+    padding: "5px 12px", borderRadius: 8, border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+    background: active ? "var(--accent)" : "var(--bg-card2)", color: active ? "#08141e" : disabled ? "var(--text-muted)" : "var(--text-secondary)",
+    fontFamily: "var(--font-body)", fontSize: 13, cursor: disabled ? "not-allowed" : "pointer", fontWeight: active ? 700 : 400,
+  });
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, padding: "1rem 0", marginTop: "1rem" }}>
+      <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+        Showing {Math.min((page - 1) * limit + 1, total)}–{Math.min(page * limit, total)} of {total.toLocaleString()} cases
+      </span>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        <button style={btnStyle(false, page === 1)} disabled={page === 1} onClick={() => onPage(page - 1)}>← Prev</button>
+        {start > 1 && <><button style={btnStyle(false, false)} onClick={() => onPage(1)}>1</button><span style={{ color: "var(--text-muted)", padding: "0 4px", alignSelf: "center" }}>…</span></>}
+        {pages.map(n => <button key={n} style={btnStyle(n === page, false)} onClick={() => onPage(n)}>{n}</button>)}
+        {end < totalPages && <><span style={{ color: "var(--text-muted)", padding: "0 4px", alignSelf: "center" }}>…</span><button style={btnStyle(false, false)} onClick={() => onPage(totalPages)}>{totalPages}</button></>}
+        <button style={btnStyle(false, page === totalPages)} disabled={page === totalPages} onClick={() => onPage(page + 1)}>Next →</button>
+      </div>
+    </div>
+  );
+}
+
 function PastCasesPage() {
-  const [allCases, setAllCases] = useState([]);
   const [cases, setCases] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
+  const [cats, setCats] = useState(["All"]);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
   const [selectedCase, setSelectedCase] = useState(null);
   const [caseDetail, setCaseDetail] = useState(null);
-  const [cats, setCats] = useState(["All"]);
+  const topRef = useRef(null);
 
-  useEffect(() => { loadCases(); }, []);
+  useEffect(() => { loadCats(); }, []);
+  useEffect(() => { load(page, category, search, limit); }, [page, limit]);
 
-  // Re-filter whenever search text or category changes
-  useEffect(() => {
-    if (allCases.length === 0) return;
-    runFilter(search, category, allCases);
-  }, [search, category, allCases]);
+  const loadCats = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/cases/categories`);
+      const d = await r.json();
+      if (d.categories) setCats(["All", ...d.categories.map(c => c.name)]);
+    } catch {}
+  };
 
-  const loadCases = async () => {
+  const load = async (pg = 1, cat = category, q = search, lim = limit) => {
     setLoading(true);
     try {
-      const r = await fetch(`${API_URL}/api/cases/`);
+      const params = new URLSearchParams({ page: pg, limit: lim });
+      if (cat && cat !== "All") params.set("category", cat);
+      if (q && q.trim()) params.set("search", q.trim());
+      const r = await fetch(`${API_URL}/api/cases/?${params}`);
       const d = await r.json();
-      if (d.cases) {
-        setAllCases(d.cases);
-        // Build category list from actual data in DB
-        const uniqueCats = ["All", ...Array.from(new Set(d.cases.map(c => c.category).filter(Boolean))).sort()];
-        setCats(uniqueCats);
-      }
-    }
-    catch {} finally { setLoading(false); }
+      if (d.cases) { setCases(d.cases); setTotal(d.total); setTotalPages(d.total_pages || 1); }
+    } catch {} finally { setLoading(false); }
+    if (topRef.current) topRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const runFilter = (q, cat, data) => {
-    let filtered = [...data];
-    if (cat && cat !== "All") filtered = filtered.filter(c => c.category === cat);
-    if (q && q.trim()) {
-      const term = q.trim().toLowerCase();
-      filtered = filtered.filter(c =>
-        (c.title || "").toLowerCase().includes(term) ||
-        (c.citation || "").toLowerCase().includes(term) ||
-        (c.summary || "").toLowerCase().includes(term) ||
-        (c.court || "").toLowerCase().includes(term) ||
-        (c.judge || "").toLowerCase().includes(term) ||
-        (c.category || "").toLowerCase().includes(term) ||
-        String(c.year || "").includes(term)
-      );
-    }
-    setCases(filtered);
-  };
-
-  const handleSearchChange = (e) => { setSearch(e.target.value); };
-  const handleCategoryChange = (cat) => { setCategory(cat); };
-
-  const keywordSearch = async () => {
-    if (!search.trim()) { runFilter("", category, allCases); return; }
-    setLoading(true);
-    try {
-      const r = await fetch(`${API_URL}/api/cases/search?q=${encodeURIComponent(search)}`);
-      const d = await r.json();
-      if (d.cases && d.cases.length > 0) {
-        const filtered = category !== "All" ? d.cases.filter(c => c.category === category) : d.cases;
-        setCases(filtered);
-      } else {
-        runFilter(search, category, allCases);
-      }
-    } catch { runFilter(search, category, allCases); }
-    finally { setLoading(false); }
-  };
+  const handleSearch = () => { setPage(1); load(1, category, search, limit); };
+  const handleCatChange = (cat) => { setCategory(cat); setPage(1); load(1, cat, search, limit); };
+  const handleLimitChange = (lim) => { setLimit(lim); setPage(1); load(1, category, search, lim); };
+  const handlePage = (pg) => { setPage(pg); load(pg, category, search, limit); };
 
   const openCase = async (c) => { setSelectedCase(c); try { const r = await fetch(`${API_URL}/api/cases/${c.id}`); const d = await r.json(); setCaseDetail(d); } catch { setCaseDetail(c); } };
 
   return (<>
-    <div className="research-hero"><h2>📚 Legal Research Database</h2><p>Access Pakistani case laws and precedents</p>
-      <div className="search-big"><input placeholder="Search cases by keyword..." value={search} onChange={handleSearchChange} onKeyDown={e => e.key === "Enter" && keywordSearch()} /><button onClick={keywordSearch}>🔍 Search</button></div>
-      <div className="chip-row">{cats.map(c => (<button key={c} className={`chip ${category === c ? "active" : ""}`} onClick={() => handleCategoryChange(c)}>{c}</button>))}</div>
+    <div ref={topRef} className="research-hero">
+      <h2>📚 Legal Research Database</h2>
+      <p>Access Pakistani case laws and precedents — {total > 0 ? `${total.toLocaleString()} cases` : ""}</p>
+      <div className="search-big">
+        <input placeholder="Search cases by keyword..." value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSearch()} />
+        <button onClick={handleSearch}>🔍 Search</button>
+      </div>
+      <div className="chip-row">
+        {cats.map(c => <button key={c} className={`chip ${category === c ? "active" : ""}`} onClick={() => handleCatChange(c)}>{c}</button>)}
+      </div>
     </div>
-    {loading ? <div className="loading">⏳ Loading...</div> : cases.length === 0 ? <div className="empty">📚 No cases found</div> : <>
-      <div style={{color:"var(--text-secondary)", fontSize:"0.88rem", marginBottom:"1rem"}}>Showing {cases.length} results</div>
-      {cases.map(c => (<div key={c.id} className="past-case-card" onClick={() => openCase(c)}><div className="past-top"><div style={{flex:1}}><div className="past-title">{c.title}</div><div className="past-citation">{c.citation}</div></div><div className="past-category">{c.category}</div></div><div className="past-summary">{c.summary}</div><div className="past-meta"><span><strong>Court:</strong> {c.court}</span>{c.year > 0 && <span><strong>Year:</strong> {c.year}</span>}{c.judge && <span><strong>Judge:</strong> {c.judge}</span>}</div></div>))}
-    </>}
-    {selectedCase && <div className="case-modal-overlay" onClick={e => e.target.classList.contains('case-modal-overlay') && setSelectedCase(null)}><div className="case-modal"><div className="case-modal-header"><div><div className="case-modal-title">{selectedCase.title}</div><div style={{fontFamily:"monospace", fontSize:"0.82rem", color:"var(--accent)"}}>{selectedCase.citation}</div><div className="case-modal-meta"><span>📂 {selectedCase.category}</span><span>🏛 {selectedCase.court}</span>{selectedCase.year > 0 && <span>📅 {selectedCase.year}</span>}{selectedCase.judge && <span>👨‍⚖️ {selectedCase.judge}</span>}</div></div><button className="case-modal-close" onClick={() => setSelectedCase(null)}>✕</button></div><div className="case-modal-body"><div className="case-modal-section"><h3>📋 Summary</h3><div className="case-modal-text">{caseDetail?.summary || selectedCase.summary}</div></div>{caseDetail?.full_judgment && <div className="case-modal-section"><h3>📜 Full Judgment</h3><div className="case-modal-text">{caseDetail.full_judgment}</div></div>}</div></div></div>}
+
+    {/* Items per page */}
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "0.75rem" }}>
+      <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>Show</span>
+      {[10, 20, 50, 100].map(n => (
+        <button key={n} onClick={() => handleLimitChange(n)} style={{ padding: "3px 12px", borderRadius: 6, border: `1px solid ${limit === n ? "var(--accent)" : "var(--border)"}`, background: limit === n ? "rgba(0,196,180,0.15)" : "var(--bg-card2)", color: limit === n ? "var(--accent)" : "var(--text-secondary)", fontFamily: "var(--font-body)", fontSize: 12, cursor: "pointer", fontWeight: limit === n ? 700 : 400 }}>{n}</button>
+      ))}
+      <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>per page</span>
+    </div>
+
+    {loading ? <div className="loading">⏳ Loading...</div>
+      : cases.length === 0 ? <div className="empty">📚 No cases found</div>
+      : <>
+        {cases.map(c => (
+          <div key={c.id} className="past-case-card" onClick={() => openCase(c)}>
+            <div className="past-top">
+              <div style={{ flex: 1 }}><div className="past-title">{c.title}</div><div className="past-citation">{c.citation}</div></div>
+              <div className="past-category">{c.category}</div>
+            </div>
+            <div className="past-summary">{c.summary}</div>
+            <div className="past-meta">
+              <span><strong>Court:</strong> {c.court}</span>
+              {c.year > 0 && <span><strong>Year:</strong> {c.year}</span>}
+              {c.judge && <span><strong>Judge:</strong> {c.judge}</span>}
+            </div>
+          </div>
+        ))}
+        {totalPages > 1 && <PCPaginationBar page={page} totalPages={totalPages} total={total} limit={limit} onPage={handlePage} />}
+      </>}
+
+    {selectedCase && (
+      <div className="case-modal-overlay" onClick={e => e.target.classList.contains("case-modal-overlay") && setSelectedCase(null)}>
+        <div className="case-modal">
+          <div className="case-modal-header">
+            <div>
+              <div className="case-modal-title">{selectedCase.title}</div>
+              <div style={{ fontFamily: "monospace", fontSize: "0.82rem", color: "var(--accent)" }}>{selectedCase.citation}</div>
+              <div className="case-modal-meta">
+                <span>📂 {selectedCase.category}</span>
+                <span>🏛 {selectedCase.court}</span>
+                {selectedCase.year > 0 && <span>📅 {selectedCase.year}</span>}
+                {selectedCase.judge && <span>👨‍⚖️ {selectedCase.judge}</span>}
+              </div>
+            </div>
+            <button className="case-modal-close" onClick={() => setSelectedCase(null)}>✕</button>
+          </div>
+          <div className="case-modal-body">
+            <div className="case-modal-section"><h3>📋 Summary</h3><div className="case-modal-text">{caseDetail?.summary || selectedCase.summary}</div></div>
+            {caseDetail?.full_judgment && <div className="case-modal-section"><h3>📜 Full Judgment</h3><div className="case-modal-text">{caseDetail.full_judgment}</div></div>}
+          </div>
+        </div>
+      </div>
+    )}
   </>);
 }
 
