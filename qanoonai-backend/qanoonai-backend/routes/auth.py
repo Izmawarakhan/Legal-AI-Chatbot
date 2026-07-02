@@ -168,6 +168,24 @@ async def login(data: LoginRequest):
     }
 
 
+@router.get("/customers")
+async def get_all_customers():
+    """Admin: get all customers"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not connected")
+    customers = []
+    for u in db.users.find({"role": "customer"}).sort("created_at", -1):
+        customers.append({
+            "id": str(u["_id"]),
+            "name": u.get("name", ""),
+            "email": u.get("email", ""),
+            "phone": u.get("phone", ""),
+            "created_at": u["created_at"].isoformat() if u.get("created_at") else None,
+        })
+    return {"total": len(customers), "customers": customers}
+
+
 @router.get("/verify/{token}")
 async def verify_token(token: str):
     """

@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { deriveKeyFromChatId, encryptMessage, decryptMessage } from "./utils/encryption";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8001";
 const CHATBOT_URL = import.meta.env.VITE_CHATBOT_URL || "https://chatbot.creoation.com";
@@ -135,47 +136,72 @@ function OverviewPage({ lawyerData }) {
 }
 
 function PastCasesPage() {
-  const [allCases, setAllCases] = useState([]); const [cases, setCases] = useState([]); const [loading, setLoading] = useState(true); const [search, setSearch] = useState(""); const [category, setCategory] = useState("All"); const [selectedCase, setSelectedCase] = useState(null); const [caseDetail, setCaseDetail] = useState(null);
-  const cats = ["All", "Family Law", "Criminal Law", "Tax Law", "Banking Law", "Property Law", "Constitutional Law", "Civil Law"];
+  const [allCases, setAllCases] = useState([]);
+  const [cases, setCases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [caseDetail, setCaseDetail] = useState(null);
+  const [cats, setCats] = useState(["All"]);
 
   useEffect(() => { loadCases(); }, []);
 
+  // Re-filter whenever search text or category changes
+  useEffect(() => {
+    if (allCases.length === 0) return;
+    runFilter(search, category, allCases);
+  }, [search, category, allCases]);
+
   const loadCases = async () => {
     setLoading(true);
-    try { const r = await fetch(`${API_URL}/api/cases/`); const d = await r.json(); if (d.cases) { setAllCases(d.cases); setCases(d.cases); } }
+    try {
+      const r = await fetch(`${API_URL}/api/cases/`);
+      const d = await r.json();
+      if (d.cases) {
+        setAllCases(d.cases);
+        // Build category list from actual data in DB
+        const uniqueCats = ["All", ...Array.from(new Set(d.cases.map(c => c.category).filter(Boolean))).sort()];
+        setCats(uniqueCats);
+      }
+    }
     catch {} finally { setLoading(false); }
   };
 
-  const applyFilters = (q, cat, data) => {
-    let filtered = data || allCases;
+  const runFilter = (q, cat, data) => {
+    let filtered = [...data];
     if (cat && cat !== "All") filtered = filtered.filter(c => c.category === cat);
     if (q && q.trim()) {
-      const term = q.toLowerCase();
+      const term = q.trim().toLowerCase();
       filtered = filtered.filter(c =>
         (c.title || "").toLowerCase().includes(term) ||
         (c.citation || "").toLowerCase().includes(term) ||
         (c.summary || "").toLowerCase().includes(term) ||
         (c.court || "").toLowerCase().includes(term) ||
-        (c.judge || "").toLowerCase().includes(term)
+        (c.judge || "").toLowerCase().includes(term) ||
+        (c.category || "").toLowerCase().includes(term) ||
+        String(c.year || "").includes(term)
       );
     }
     setCases(filtered);
   };
 
-  const handleSearchChange = (e) => { setSearch(e.target.value); applyFilters(e.target.value, category); };
-  const handleCategoryChange = (cat) => { setCategory(cat); applyFilters(search, cat); };
+  const handleSearchChange = (e) => { setSearch(e.target.value); };
+  const handleCategoryChange = (cat) => { setCategory(cat); };
 
   const keywordSearch = async () => {
-    if (!search.trim()) { applyFilters("", category); return; }
+    if (!search.trim()) { runFilter("", category, allCases); return; }
     setLoading(true);
     try {
       const r = await fetch(`${API_URL}/api/cases/search?q=${encodeURIComponent(search)}`);
       const d = await r.json();
-      if (d.cases) {
+      if (d.cases && d.cases.length > 0) {
         const filtered = category !== "All" ? d.cases.filter(c => c.category === category) : d.cases;
         setCases(filtered);
+      } else {
+        runFilter(search, category, allCases);
       }
-    } catch { applyFilters(search, category); }
+    } catch { runFilter(search, category, allCases); }
     finally { setLoading(false); }
   };
 
@@ -195,127 +221,592 @@ function PastCasesPage() {
 }
 
 function LawyerChatsPage() {
-  const [chats, setChats] = useState([]); const [activeChat, setActiveChat] = useState(null); const [messages, setMessages] = useState([]); const [input, setInput] = useState(""); const [loading, setLoading] = useState(true); const [sending, setSending] = useState(false);
+  const [chats, setChats] = useState([]);
+  const [activeChat, setActiveChat] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
   const scrollRef = useRef(null);
+  const chatKeyRef = useRef(null); // E2EE key in memory only
   const user = JSON.parse(localStorage.getItem("user") || "{}");
+
   useEffect(() => { loadChats(); }, []);
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
-  useEffect(() => { if (!activeChat) return; const i = setInterval(() => loadMessages(activeChat.id), 5000); return () => clearInterval(i); }, [activeChat]);
+  useEffect(() => {
+    if (!activeChat) return;
+    const i = setInterval(() => loadMessages(activeChat.id), 5000);
+    return () => clearInterval(i);
+  }, [activeChat]);
 
-  const loadChats = async () => { setLoading(true); try { const r = await fetch(`${API_URL}/api/chats/user/${user.id}?role=lawyer`); const d = await r.json(); if (d.chats) setChats(d.chats); } catch {} finally { setLoading(false); } };
-  const loadMessages = async (id) => { try { const r = await fetch(`${API_URL}/api/chats/${id}`); const d = await r.json(); if (d.messages) setMessages(d.messages); } catch {} };
-  const openChat = (c) => { setActiveChat(c); loadMessages(c.id); };
-  const sendMessage = async () => {
-    if (!input.trim() || !activeChat) return; setSending(true);
-    try { await fetch(`${API_URL}/api/chats/send`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ chat_id: activeChat.id, sender_id: user.id, sender_role: "lawyer", receiver_id: activeChat.customer_id, message: input, message_type: "text" }) }); setInput(""); loadMessages(activeChat.id); loadChats(); } catch {} finally { setSending(false); }
+  const loadChats = async () => {
+    setLoading(true);
+    try { const r = await fetch(`${API_URL}/api/chats/user/${user.id}?role=lawyer`); const d = await r.json(); if (d.chats) setChats(d.chats); }
+    catch {} finally { setLoading(false); }
   };
-  const formatTime = (ts) => { if (!ts) return ""; try { return new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); } catch { return ""; } };
-  const getInitials = (n) => { if (!n) return "?"; const p = n.split(" "); return p.length >= 2 ? (p[0][0]+p[1][0]).toUpperCase() : n[0].toUpperCase(); };
+
+  const loadMessages = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/api/chats/${id}`);
+      const d = await r.json();
+      if (d.messages && chatKeyRef.current) {
+        const decrypted = d.messages.map(m => ({ ...m, message: decryptMessage(m.message, chatKeyRef.current) }));
+        setMessages(decrypted);
+      } else if (d.messages) {
+        setMessages(d.messages);
+      }
+    } catch {}
+  };
+
+  const openChat = async (c) => {
+    chatKeyRef.current = await deriveKeyFromChatId(c.id);
+    setActiveChat(c);
+    loadMessages(c.id);
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || !activeChat) return;
+    setSending(true);
+    try {
+      const key = chatKeyRef.current;
+      const payload = key ? encryptMessage(input.trim(), key) : input.trim();
+      await fetch(`${API_URL}/api/chats/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: activeChat.id, sender_id: user.id, sender_role: "lawyer", receiver_id: activeChat.customer_id, message: payload, message_type: "text" }),
+      });
+      setInput(""); loadMessages(activeChat.id); loadChats();
+    } catch {} finally { setSending(false); }
+  };
+
+  const formatTime = (ts) => { if (!ts) return ""; try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
+  const getInitials = (n) => { if (!n) return "?"; const p = n.split(" "); return p.length >= 2 ? (p[0][0] + p[1][0]).toUpperCase() : n[0].toUpperCase(); };
 
   return (
     <div className="chats-layout">
       <div className="chats-list">
         <div className="chats-list-header">👥 Client Messages ({chats.length})</div>
-        {loading ? <div style={{padding:"2rem", textAlign:"center", color:"var(--text-muted)"}}>Loading...</div> :
-         chats.length === 0 ? <div style={{padding:"2rem", textAlign:"center", color:"var(--text-muted)"}}>No client messages yet.</div> :
-         chats.map(c => (<div key={c.id} className={`chat-item ${activeChat?.id === c.id ? "active" : ""}`} onClick={() => openChat(c)}><div className="chat-item-top"><div className="chat-item-name">👤 {c.customer_name}</div>{c.unread > 0 && <span className="chat-item-unread">{c.unread}</span>}</div><div className="chat-item-last">{c.last_message || "No messages yet"}</div><div className="chat-item-time">{formatTime(c.last_time)}</div></div>))}
+        {loading ? <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>Loading...</div>
+          : chats.length === 0 ? <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>No client messages yet.</div>
+          : chats.map(c => (
+            <div key={c.id} className={`chat-item ${activeChat?.id === c.id ? "active" : ""}`} onClick={() => openChat(c)}>
+              <div className="chat-item-top">
+                <div className="chat-item-name">👤 {c.customer_name}</div>
+                {c.unread > 0 && <span className="chat-item-unread">{c.unread}</span>}
+              </div>
+              <div className="chat-item-last">🔒 {c.last_message ? "Encrypted message" : "No messages yet"}</div>
+              <div className="chat-item-time">{formatTime(c.last_time)}</div>
+            </div>
+          ))}
       </div>
-      {!activeChat ? <div className="no-chat-selected">👈 Select a client to view messages</div> : (
-        <div className="chat-area">
-          <div className="chat-area-header"><div className="chat-area-avatar">{getInitials(activeChat.customer_name)}</div><div><div className="chat-area-name">👤 {activeChat.customer_name}</div><div className="chat-area-status">Client</div></div></div>
-          <div className="chat-area-msgs" ref={scrollRef}>
-            {messages.length === 0 ? <div style={{margin:"auto", textAlign:"center", color:"var(--text-muted)"}}><div style={{fontSize:48, marginBottom:"0.5rem"}}>💬</div><p>No messages yet.</p></div> :
-            messages.map((m, i) => (<div key={i} className={`chat-msg ${m.sender_role === "lawyer" ? "sent" : "received"}`}>{m.message}<div className="chat-msg-time">{formatTime(m.timestamp)}</div></div>))}
+
+      {!activeChat
+        ? <div className="no-chat-selected">👈 Select a client to view messages</div>
+        : <div className="chat-area">
+            <div className="chat-area-header">
+              <div className="chat-area-avatar">{getInitials(activeChat.customer_name)}</div>
+              <div>
+                <div className="chat-area-name">👤 {activeChat.customer_name}</div>
+                <div className="chat-area-status" style={{ color: "#6ee7b7", fontSize: 11 }}>🔒 End-to-end encrypted</div>
+              </div>
+            </div>
+
+            {/* E2EE notice */}
+            <div style={{ background: "rgba(16,60,50,0.7)", borderBottom: "1px solid rgba(45,212,168,0.12)", padding: "6px 16px", display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+              <span style={{ fontSize: 12 }}>🔒</span>
+              <span style={{ fontSize: 11, color: "#6ee7b7" }}>This chat is end-to-end encrypted. Messages can only be read by you and the recipient.</span>
+            </div>
+
+            <div className="chat-area-msgs" ref={scrollRef}>
+              {messages.length === 0
+                ? <div style={{ margin: "auto", textAlign: "center", color: "var(--text-muted)" }}><div style={{ fontSize: 48, marginBottom: "0.5rem" }}>💬</div><p>No messages yet.</p></div>
+                : messages.map((m, i) => (
+                  <div key={i} className={`chat-msg ${m.sender_role === "lawyer" ? "sent" : "received"}`}>
+                    {m.message}
+                    <div className="chat-msg-time">{formatTime(m.timestamp)} 🔒</div>
+                  </div>
+                ))}
+            </div>
+            <div className="chat-area-input">
+              <input placeholder="Reply to client... (end-to-end encrypted)" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendMessage()} />
+              <button onClick={sendMessage} disabled={sending || !input.trim()}>{sending ? "..." : "Send 🔒"}</button>
+            </div>
           </div>
-          <div className="chat-area-input"><input placeholder="Reply to client..." value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendMessage()} /><button onClick={sendMessage} disabled={sending || !input.trim()}>{sending ? "..." : "Send ➤"}</button></div>
+      }
+    </div>
+  );
+}
+
+// ============================================
+// VERSION 2 CHATBOT — Full implementation
+// ============================================
+
+const CB_CATEGORIES = [
+  { name: "Family Law", icon: "👨‍👩‍👧‍👦", desc: "Marriage, Divorce, Custody, Meher" },
+  { name: "Criminal Law", icon: "⚖️", desc: "FIR, Bail, Murder, Theft, Fraud" },
+  { name: "Labour Laws", icon: "👷", desc: "Employment, Wages, Termination" },
+  { name: "Land & Property Laws", icon: "🏠", desc: "Property Disputes, Transfer, Fraud" },
+  { name: "Islamic Religious Laws", icon: "☪️", desc: "Hudood, Waqf, Blasphemy" },
+  { name: "Excise Taxation Laws", icon: "💰", desc: "Income Tax, Sales Tax, FBR" },
+  { name: "Health & Medical Laws", icon: "🏥", desc: "Negligence, Hospital, Drug Cases" },
+];
+
+const CB_SUGGESTIONS = [
+  "I want to file for divorce. What are my legal rights?",
+  "Someone snatched my phone. How do I register an FIR?",
+  "My employer terminated me without notice. What can I do?",
+  "A hospital refused emergency treatment. Is this legal?",
+];
+
+const STT_LANGUAGES = [
+  { code: "en-US", label: "English (US)" },
+  { code: "ur-PK", label: "Urdu (اردو)" },
+  { code: "en-PK", label: "English (PK)" },
+  { code: "hi-IN", label: "Hindi (हिंदी)" },
+];
+
+function useCBVoice() {
+  const [isRecording, setIsRecording] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [selectedVoiceIndex, setSelectedVoiceIndex] = useState(0);
+  const [sttSupported, setSttSupported] = useState(false);
+  const [ttsSupported, setTtsSupported] = useState(false);
+  const [sttLang, setSttLang] = useState("en-US");
+  const recognitionRef = useRef(null);
+  const finalTranscriptRef = useRef("");
+  const onResultCallbackRef = useRef(null);
+  const shouldRestartRef = useRef(false);
+  const silenceTimerRef = useRef(null);
+  const speakQueueRef = useRef([]);
+  const speakingIdxRef = useRef(0);
+
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    setSttSupported(true);
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = sttLang;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => { setIsRecording(true); setIsListening(true); setTranscript("🎤 Listening..."); finalTranscriptRef.current = ""; };
+    recognition.onresult = (e) => {
+      let interim = "", finalText = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      if (finalText) finalTranscriptRef.current += finalText;
+      setTranscript(finalTranscriptRef.current || interim || "🎤 Listening...");
+      clearTimeout(silenceTimerRef.current);
+      if (finalTranscriptRef.current.trim()) {
+        silenceTimerRef.current = setTimeout(() => {
+          const text = finalTranscriptRef.current.trim();
+          if (text && shouldRestartRef.current) {
+            shouldRestartRef.current = false;
+            try { recognition.stop(); } catch (_) {}
+            if (onResultCallbackRef.current) onResultCallbackRef.current(text);
+          }
+        }, 2500);
+      }
+    };
+    recognition.onend = () => {
+      setIsRecording(false); setIsListening(false); clearTimeout(silenceTimerRef.current);
+      if (shouldRestartRef.current) {
+        const text = finalTranscriptRef.current.trim();
+        if (text) { if (onResultCallbackRef.current) onResultCallbackRef.current(text); shouldRestartRef.current = false; }
+        else { try { setTimeout(() => { if (shouldRestartRef.current) recognition.start(); }, 100); } catch (_) {} }
+      }
+    };
+    recognition.onerror = (e) => {
+      clearTimeout(silenceTimerRef.current);
+      if (e.error === "no-speech") { if (shouldRestartRef.current) { try { setTimeout(() => { if (shouldRestartRef.current) recognition.start(); }, 100); } catch (_) {} } return; }
+      if (e.error === "aborted") return;
+      setTranscript(`Error: ${e.error}`); setIsRecording(false); setIsListening(false); shouldRestartRef.current = false;
+    };
+    recognitionRef.current = recognition;
+    return () => { shouldRestartRef.current = false; clearTimeout(silenceTimerRef.current); try { recognition.stop(); } catch (_) {} };
+  }, [sttLang]);
+
+  useEffect(() => {
+    if (!window.speechSynthesis) return;
+    setTtsSupported(true);
+    const loadVoices = () => {
+      const av = window.speechSynthesis.getVoices(); setVoices(av);
+      const isFemale = (v) => { const n = v.name.toLowerCase(); return n.includes("female")||n.includes("zira")||n.includes("heera")||n.includes("samantha")||n.includes("victoria")||n.includes("karen")||n.includes("veena")||n.includes("raveena"); };
+      const urduF = av.findIndex(v => (v.lang.startsWith("ur")||v.lang==="ur-PK") && isFemale(v));
+      if (urduF !== -1) { setSelectedVoiceIndex(urduF); return; }
+      const urdu = av.findIndex(v => v.lang.startsWith("ur")||v.lang==="ur-PK");
+      if (urdu !== -1) { setSelectedVoiceIndex(urdu); return; }
+      const enF = av.findIndex(v => v.lang.startsWith("en") && isFemale(v));
+      if (enF !== -1) setSelectedVoiceIndex(enF);
+    };
+    loadVoices(); window.speechSynthesis.onvoiceschanged = loadVoices;
+  }, []);
+
+  const splitIntoChunks = (text) => {
+    const raw = text.match(/[^.!?۔؟\n]+[.!?۔؟\n]?/g) || [text];
+    const chunks = []; let current = "";
+    for (const piece of raw) { if ((current+piece).length > 180) { if (current.trim()) chunks.push(current.trim()); current = piece; } else current += piece; }
+    if (current.trim()) chunks.push(current.trim());
+    return chunks;
+  };
+
+  const speakNextChunk = useCallback(() => {
+    const queue = speakQueueRef.current; const idx = speakingIdxRef.current;
+    if (idx >= queue.length) { setIsSpeaking(false); speakQueueRef.current = []; speakingIdxRef.current = 0; return; }
+    const utterance = new SpeechSynthesisUtterance(queue[idx]);
+    if (voices[selectedVoiceIndex]) utterance.voice = voices[selectedVoiceIndex];
+    utterance.rate = /[؀-ۿ]/.test(queue[idx]) ? 0.9 : 1.0;
+    utterance.onend = () => { speakingIdxRef.current += 1; setTimeout(() => speakNextChunk(), 50); };
+    utterance.onerror = () => { speakingIdxRef.current += 1; setTimeout(() => speakNextChunk(), 50); };
+    window.speechSynthesis.speak(utterance);
+  }, [voices, selectedVoiceIndex]);
+
+  const speak = useCallback((text) => {
+    if (!window.speechSynthesis || !text) return;
+    window.speechSynthesis.cancel();
+    const chunks = splitIntoChunks(text);
+    speakQueueRef.current = chunks; speakingIdxRef.current = 0; setIsSpeaking(true);
+    const keepAlive = setInterval(() => { if (window.speechSynthesis.speaking) { window.speechSynthesis.pause(); window.speechSynthesis.resume(); } else clearInterval(keepAlive); }, 10000);
+    speakNextChunk();
+  }, [speakNextChunk]);
+
+  const stopSpeaking = useCallback(() => { if (window.speechSynthesis) { window.speechSynthesis.cancel(); speakQueueRef.current = []; speakingIdxRef.current = 0; setIsSpeaking(false); } }, []);
+
+  const toggleMic = useCallback((onResult) => {
+    if (!recognitionRef.current) return;
+    if (isSpeaking) { window.speechSynthesis.cancel(); speakQueueRef.current = []; setIsSpeaking(false); }
+    if (!isRecording) {
+      onResultCallbackRef.current = onResult; finalTranscriptRef.current = ""; shouldRestartRef.current = true; setTranscript("🎤 Listening...");
+      try { recognitionRef.current.start(); } catch (e) { try { recognitionRef.current.stop(); } catch (_) {} setTimeout(() => { try { recognitionRef.current.start(); } catch (_) {} }, 150); }
+    } else {
+      shouldRestartRef.current = false; clearTimeout(silenceTimerRef.current);
+      try { recognitionRef.current.stop(); } catch (_) {}
+      const text = finalTranscriptRef.current.trim();
+      if (text && onResultCallbackRef.current) onResultCallbackRef.current(text);
+      setIsRecording(false); setIsListening(false);
+    }
+  }, [isRecording, isSpeaking]);
+
+  return { isRecording, isSpeaking, transcript, isListening, voices, selectedVoiceIndex, setSelectedVoiceIndex, sttSupported, ttsSupported, sttLang, setSttLang, toggleMic, speak, stopSpeaking };
+}
+
+function CBVoicePanel({ voice, onMicToggle }) {
+  const c = { accent:"#2dd4a8", border:"rgba(45,212,168,0.12)", text:"#e2e8f0", textMuted:"#64748b", danger:"#ef4444", bgInput:"rgba(20,50,50,0.6)" };
+  return (
+    <div style={{padding:"0 0 8px 0"}}>
+      <div style={{background:c.bgInput, border:`1px solid ${c.border}`, borderRadius:12, padding:"12px 16px", display:"flex", flexDirection:"column", gap:10, backdropFilter:"blur(16px)"}}>
+        <div style={{display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:8, background: voice.isListening ? "rgba(45,212,168,0.08)" : "rgba(255,255,255,0.03)", border:`1px solid ${voice.isListening ? "rgba(45,212,168,0.3)" : "rgba(255,255,255,0.06)"}`, minHeight:44}}>
+          <span style={{fontSize:14}}>{voice.isRecording ? "🔴" : voice.isSpeaking ? "🔊" : "🎤"}</span>
+          <span style={{flex:1, fontSize:13, color: voice.isListening ? c.text : c.textMuted}}>
+            {voice.isRecording ? voice.transcript || "🎤 Listening..." : voice.isSpeaking ? "🔊 Speaking response..." : "Tap mic and speak — auto-sends after pause"}
+          </span>
         </div>
-      )}
+        <div style={{display:"flex", alignItems:"center", gap:10, flexWrap:"wrap"}}>
+          <div style={{display:"flex", alignItems:"center", gap:6}}>
+            <span style={{fontSize:11, color:c.textMuted, textTransform:"uppercase", letterSpacing:"0.1em"}}>🎤 STT</span>
+            <select value={voice.sttLang} onChange={e => voice.setSttLang(e.target.value)} style={{background:"rgba(20,50,50,0.8)", border:`1px solid ${c.border}`, borderRadius:8, padding:"6px 8px", color:c.text, fontSize:11, outline:"none", cursor:"pointer"}}>
+              {STT_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex", alignItems:"center", gap:6, flex:1, minWidth:150}}>
+            <span style={{fontSize:11, color:c.textMuted, textTransform:"uppercase", letterSpacing:"0.1em"}}>🔊 TTS</span>
+            <select value={voice.selectedVoiceIndex} onChange={e => voice.setSelectedVoiceIndex(Number(e.target.value))} style={{flex:1, minWidth:120, background:"rgba(20,50,50,0.8)", border:`1px solid ${c.border}`, borderRadius:8, padding:"6px 8px", color:c.text, fontSize:11, outline:"none", cursor:"pointer"}}>
+              {voice.voices.map((v,i) => <option key={i} value={i}>{v.name} ({v.lang})</option>)}
+            </select>
+          </div>
+          <button onClick={onMicToggle} style={{width:44, height:44, borderRadius:"50%", background: voice.isRecording ? "rgba(239,68,68,0.15)" : "rgba(45,212,168,0.1)", border:`2px solid ${voice.isRecording ? c.danger : "rgba(45,212,168,0.3)"}`, color: voice.isRecording ? c.danger : c.accent, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, animation: voice.isRecording ? "micPulse 1.2s ease-in-out infinite" : "none"}}>
+            {voice.isRecording ? "⏹" : "🎙️"}
+          </button>
+          {voice.isSpeaking && <button onClick={voice.stopSpeaking} style={{padding:"6px 12px", background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, color:c.danger, fontSize:12, cursor:"pointer"}}>⏹ Stop</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CBWelcomeScreen({ onSuggestion }) {
+  const c = { accent:"#2dd4a8", border:"rgba(45,212,168,0.12)", text:"#e2e8f0", textDim:"#94a3b8", textMuted:"#64748b", glass:"rgba(16,42,42,0.55)", bgInput:"rgba(20,50,50,0.6)", accentDim:"rgba(45,212,168,0.15)" };
+  return (
+    <div style={{display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", padding:"0 24px", overflowY:"auto"}}>
+      <style>{`@keyframes cbPulse { 0%,100%{box-shadow:0 0 40px rgba(45,212,168,0.2);}50%{box-shadow:0 0 60px rgba(45,212,168,0.4);}}`}</style>
+      <div style={{width:72, height:72, borderRadius:20, background:"linear-gradient(135deg,rgba(45,212,168,0.2),rgba(56,189,248,0.15))", border:`1px solid ${c.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20, animation:"cbPulse 3s ease-in-out infinite"}}>⚖️</div>
+      <h2 style={{fontSize:22, fontWeight:700, marginBottom:8, textAlign:"center", color:c.text}}>Tell Me What's On Your Mind</h2>
+      <p style={{fontSize:14, color:c.textDim, marginBottom:24, textAlign:"center"}}>Describe your legal concern or pick a category below.</p>
+      <div style={{display:"flex", gap:10, flexWrap:"wrap", justifyContent:"center", maxWidth:650, marginBottom:24}}>
+        {CB_CATEGORIES.slice(0,4).map(cat => (
+          <div key={cat.name} onClick={() => onSuggestion("I need legal help regarding " + cat.name)}
+            style={{width:145, padding:"14px 12px", background:c.glass, border:`1px solid ${c.border}`, borderRadius:12, cursor:"pointer", transition:"all 0.2s"}}
+            onMouseEnter={e => { e.currentTarget.style.borderColor=c.accent; e.currentTarget.style.transform="translateY(-2px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor=c.border; e.currentTarget.style.transform="translateY(0)"; }}>
+            <div style={{fontSize:22, marginBottom:6}}>{cat.icon}</div>
+            <div style={{fontSize:12, fontWeight:600, marginBottom:3, color:c.text}}>{cat.name}</div>
+            <div style={{fontSize:10, color:c.textMuted, lineHeight:1.4}}>{cat.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex", flexDirection:"column", gap:8, maxWidth:560, width:"100%"}}>
+        {CB_SUGGESTIONS.map((s,i) => (
+          <button key={i} onClick={() => onSuggestion(s)}
+            style={{padding:"11px 16px", background:c.bgInput, border:`1px solid ${c.border}`, borderRadius:10, color:c.textDim, cursor:"pointer", textAlign:"left", fontSize:13, transition:"all 0.15s"}}
+            onMouseEnter={e => { e.target.style.borderColor=c.accent; e.target.style.color=c.text; e.target.style.background=c.accentDim; }}
+            onMouseLeave={e => { e.target.style.borderColor=c.border; e.target.style.color=c.textDim; e.target.style.background=c.bgInput; }}>
+            💡 {s}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CBMessageBubble({ msg, onSpeak, onStopSpeak, isSpeaking, ttsSupported }) {
+  const isUser = msg.role === "user";
+  const c = { accent:"#2dd4a8", border:"rgba(45,212,168,0.12)", text:"#e2e8f0", textMuted:"#64748b" };
+  return (
+    <div style={{display:"flex", justifyContent: isUser ? "flex-end" : "flex-start", marginBottom:16}}>
+      <div style={{maxWidth:"80%", padding:"14px 18px", borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: isUser ? "linear-gradient(135deg,rgba(45,212,168,0.2),rgba(56,189,248,0.15))" : "rgba(20,45,45,0.6)", border:`1px solid ${isUser ? "rgba(45,212,168,0.2)" : c.border}`, fontSize:14, lineHeight:1.7, color:c.text, backdropFilter:"blur(8px)", whiteSpace:"pre-wrap"}}>
+        {!isUser && (
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
+            <div style={{display:"flex", alignItems:"center", gap:6}}><span style={{fontSize:14}}>⚖️</span><span style={{fontSize:12, fontWeight:600, color:c.accent}}>QanoonAI</span></div>
+            {ttsSupported && <button onClick={() => isSpeaking ? onStopSpeak() : onSpeak(msg.content)} style={{background:"none", border:"none", cursor:"pointer", fontSize:14, opacity: isSpeaking ? 1 : 0.5, color: isSpeaking ? "#ef4444" : c.accent, transition:"all 0.2s"}}>{isSpeaking ? "⏹" : "🔊"}</button>}
+          </div>
+        )}
+        {msg.content}
+        {msg.images && msg.images.length > 0 && (
+          <div style={{display:"flex", gap:8, flexWrap:"wrap", marginTop:10}}>
+            {msg.images.map((img,idx) => <img key={idx} src={img.preview} alt={img.name} style={{maxWidth:180, maxHeight:130, borderRadius:8, border:"1px solid rgba(45,212,168,0.2)", objectFit:"cover", cursor:"pointer"}} onClick={() => window.open(img.preview,"_blank")} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CBTypingIndicator() {
+  return (
+    <div style={{display:"flex", justifyContent:"flex-start", marginBottom:16}}>
+      <style>{`@keyframes cbBounce{0%,80%,100%{transform:scale(0.8);opacity:0.4;}40%{transform:scale(1.2);opacity:1;}}`}</style>
+      <div style={{padding:"14px 18px", borderRadius:"16px 16px 16px 4px", background:"rgba(20,45,45,0.6)", border:"1px solid rgba(45,212,168,0.12)", display:"flex", alignItems:"center", gap:6}}>
+        <span style={{fontSize:14}}>⚖️</span>
+        <div style={{display:"flex", gap:4, alignItems:"center"}}>
+          {[0,1,2].map(i => <div key={i} style={{width:7, height:7, borderRadius:"50%", background:"#2dd4a8", opacity:0.5, animation:`cbBounce 1.4s ease-in-out ${i*0.2}s infinite`}} />)}
+        </div>
+      </div>
     </div>
   );
 }
 
 function AIChatbotPage() {
+  const [sessions, setSessions] = useState([]);
+  const [activeSession, setActiveSession] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [sessionId, setSessionId] = useState(null);
-  const [category, setCategory] = useState("Family Law");
-  const scrollRef = useRef(null);
-  const cats = ["Family Law", "Criminal Law", "Labour Laws", "Land & Property Laws", "Islamic Religious Laws", "Excise Taxation Laws", "Health & Medical Laws"];
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showVoicePanel, setShowVoicePanel] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const voiceTriggeredRef = useRef(false);
+  const lastMessageRef = useRef(null);
+  const voice = useCBVoice();
 
-  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+  const cbColors = { bg:"#0a1a1a", bgSidebar:"rgba(8,28,28,0.95)", bgInput:"rgba(20,50,50,0.6)", bgHover:"rgba(30,70,65,0.5)", accent:"#2dd4a8", accentDim:"rgba(45,212,168,0.15)", accentGlow:"rgba(45,212,168,0.3)", blue:"#38bdf8", text:"#e2e8f0", textDim:"#94a3b8", textMuted:"#64748b", border:"rgba(45,212,168,0.12)", borderLight:"rgba(255,255,255,0.06)", glass:"rgba(16,42,42,0.55)", danger:"#ef4444" };
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
-    setInput("");
-    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
-    setLoading(true);
+  const lawyerUser = JSON.parse(localStorage.getItem("user") || "{}");
+  const lawyerUserId = lawyerUser.id || lawyerUser._id || lawyerUser.email || "lawyer";
+
+  useEffect(() => { fetchSessions(); }, []);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages]);
+  useEffect(() => {
+    if (!voice.ttsSupported || !voiceTriggeredRef.current) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role === "assistant" && lastMsg.content !== lastMessageRef.current) {
+      lastMessageRef.current = lastMsg.content; voiceTriggeredRef.current = false;
+      setTimeout(() => voice.speak(lastMsg.content), 400);
+    }
+  }, [messages, voice]);
+
+  const fetchSessions = async () => {
     try {
-      const res = await fetch(`${CHATBOT_URL}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
-        body: JSON.stringify({ message: userMsg, session_id: sessionId, category, religion: "Muslim" })
-      });
-      const data = await res.json();
-      if (data.reply) {
-        setMessages(prev => [...prev, { role: "assistant", content: data.reply, sources: data.sources || [] }]);
-        if (data.session_id) setSessionId(data.session_id);
+      const r = await fetch(`${CHATBOT_URL}/api/chat/sessions?user_id=${encodeURIComponent(lawyerUserId)}`);
+      if (r.ok) setSessions(await r.json());
+    } catch {}
+  };
+
+  const loadSession = async (sid) => {
+    try { const r = await fetch(`${CHATBOT_URL}/api/chat/history/${sid}`); if (r.ok) { const d = await r.json(); setActiveSession(sid); setMessages(d.messages || []); } } catch {}
+  };
+
+  const startNewChat = () => { setActiveSession(null); setMessages([]); setInput(""); setUploadedFiles([]); lastMessageRef.current = null; inputRef.current?.focus(); };
+
+  const deleteSession = async (sid, e) => {
+    e.stopPropagation();
+    try { await fetch(`${CHATBOT_URL}/api/chat/session/${sid}`, { method:"DELETE" }); if (activeSession === sid) startNewChat(); fetchSessions(); } catch {}
+  };
+
+  const buildDocumentContext = () => {
+    if (uploadedFiles.length === 0) return "";
+    let ctx = "\n\n============================================\nUPLOADED DOCUMENTS\n============================================\n";
+    uploadedFiles.forEach((f, i) => {
+      if (f.extractedText && f.status === "ready" && f.extractedText.length > 100 && !f.extractedText.startsWith("[")) {
+        ctx += `\n--- Document ${i+1}: ${f.name} ---\n${f.extractedText.slice(0,2500)}\n--- End ---\n`;
+      } else {
+        ctx += `\n[File ${i+1}: ${f.name}] ${f.extractedText || ""}\n`;
       }
-    } catch { setMessages(prev => [...prev, { role: "assistant", content: "Error connecting to AI. Please try again." }]); }
+    });
+    return ctx + "\n============================================\n";
+  };
+
+  const sendMessage = async (text) => {
+    const msg = text || input.trim();
+    if (!msg && uploadedFiles.length === 0) return;
+    if (loading || uploadedFiles.some(f => f.status === "uploading")) return;
+    const effectiveMsg = msg || "I have uploaded a document. Please analyze it and tell me what legal matters it covers.";
+    const fileNames = uploadedFiles.map(f => f.name);
+    const imagePreviews = uploadedFiles.filter(f => f.preview).map(f => ({ name:f.name, preview:f.preview }));
+    const displayContent = uploadedFiles.length > 0 ? `${effectiveMsg}\n\n📎 Attached: ${fileNames.join(", ")}` : effectiveMsg;
+    setMessages(prev => [...prev, { role:"user", content:displayContent, images: imagePreviews.length > 0 ? imagePreviews : undefined }]);
+    setInput(""); setLoading(true); voice.stopSpeaking();
+    const messageForAI = buildDocumentContext() ? `${effectiveMsg}${buildDocumentContext()}` : effectiveMsg;
+    try {
+      const r = await fetch(`${CHATBOT_URL}/api/chat`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ message:messageForAI, session_id:activeSession, religion:"Muslim", user_id:lawyerUserId }) });
+      if (r.ok) { const d = await r.json(); setActiveSession(d.session_id); setMessages(prev => [...prev, { role:"assistant", content:d.reply }]); fetchSessions(); setUploadedFiles([]); }
+      else setMessages(prev => [...prev, { role:"assistant", content:"Sorry, something went wrong. Please try again." }]);
+    } catch { setMessages(prev => [...prev, { role:"assistant", content:"Connection error. Please check if the chatbot server is running." }]); }
     finally { setLoading(false); }
   };
 
-  const clearChat = () => { setMessages([]); setSessionId(null); };
+  const processFiles = async (files) => {
+    for (const file of files) {
+      const fObj = { id: Date.now()+"_"+Math.random().toString(36).slice(2,8), file, name:file.name||`file-${Date.now()}`, type:file.type, size:file.size, preview:null, extractedText:null, status:"uploading" };
+      if (file.type.startsWith("image/")) fObj.preview = URL.createObjectURL(file);
+      setUploadedFiles(prev => [...prev, fObj]);
+      const isDoc = file.type==="application/pdf"||file.type==="text/plain"||/\.(pdf|txt|doc|docx)$/i.test(file.name||"");
+      const isImg = file.type.startsWith("image/")||/\.(png|jpg|jpeg|webp)$/i.test(file.name||"");
+      if (isDoc || isImg) {
+        try {
+          setUploading(true);
+          const formData = new FormData(); formData.append("file", file);
+          const endpoint = isImg ? `${CHATBOT_URL}/api/chat/analyze-image` : `${CHATBOT_URL}/api/chat/upload`;
+          const r = await fetch(endpoint, { method:"POST", body:formData });
+          if (r.ok) {
+            const d = await r.json();
+            setUploadedFiles(prev => prev.map(f => f.id===fObj.id ? { ...f, extractedText: isImg ? `[IMAGE ANALYSIS of ${fObj.name}]:\n${d.description||d.extracted_text||""}` : d.extracted_text, status:"ready" } : f));
+          } else setUploadedFiles(prev => prev.map(f => f.id===fObj.id ? { ...f, status:"error", extractedText:"Upload failed" } : f));
+        } catch { setUploadedFiles(prev => prev.map(f => f.id===fObj.id ? { ...f, status: isImg ? "ready" : "error", extractedText: isImg ? `[Image: ${fObj.name}]` : "Error" } : f)); }
+        finally { setUploading(false); }
+      } else setUploadedFiles(prev => prev.map(f => f.id===fObj.id ? { ...f, status:"ready" } : f));
+    }
+  };
+
+  const handleFileSelect = async (e) => { await processFiles(Array.from(e.target.files)); if (fileInputRef.current) fileInputRef.current.value = ""; };
+  const handlePaste = async (e) => {
+    const items = e.clipboardData?.items; if (!items) return;
+    const imgs = []; for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith("image/")) { e.preventDefault(); const f = items[i].getAsFile(); if (f) imgs.push(new File([f], `screenshot-${Date.now()}.png`, { type:f.type })); } }
+    if (imgs.length > 0) await processFiles(imgs);
+  };
+  const handleDrop = async (e) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); const files = Array.from(e.dataTransfer.files); if (files.length > 0) await processFiles(files); };
+  const removeFile = (id) => setUploadedFiles(prev => { const r = prev.find(f => f.id===id); if (r?.preview) URL.revokeObjectURL(r.preview); return prev.filter(f => f.id!==id); });
+  const handleMicToggle = () => { voice.toggleMic((t) => { if (t) { voiceTriggeredRef.current = true; sendMessage(t); } }); };
 
   return (
-    <div style={{display:"flex", flexDirection:"column", height:"calc(100vh - 120px)"}}>
-      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"1rem", gap:"1rem", flexWrap:"wrap"}}>
-        <div style={{display:"flex", gap:"8px", flexWrap:"wrap"}}>
-          {cats.map(c => (<button key={c} className={`chip ${category === c ? "active" : ""}`} onClick={() => setCategory(c)} style={{fontSize:"0.72rem"}}>{c}</button>))}
+    <div style={{display:"flex", height:"calc(100vh - 120px)", background:"radial-gradient(ellipse at 20% 50%,rgba(16,80,70,0.4) 0%,transparent 60%),radial-gradient(ellipse at 80% 20%,rgba(20,60,90,0.3) 0%,transparent 50%),#0a1a1a", borderRadius:14, overflow:"hidden", fontFamily:"'Outfit','Inter',system-ui,sans-serif", color:cbColors.text}}
+      onPaste={handlePaste} onDragOver={e=>{e.preventDefault();setIsDragOver(true);}} onDragLeave={e=>{e.preventDefault();setIsDragOver(false);}} onDrop={handleDrop}>
+      <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+      <style>{`@keyframes micPulse{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(239,68,68,0.4);}50%{transform:scale(1.08);box-shadow:0 0 20px 4px rgba(239,68,68,0.25);}}`}</style>
+
+      {/* Drag overlay */}
+      {isDragOver && <div style={{position:"absolute",inset:0,zIndex:50,background:"rgba(45,212,168,0.08)",border:"3px dashed rgba(45,212,168,0.5)",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
+        <div style={{textAlign:"center",padding:"32px",background:"rgba(10,26,26,0.9)",borderRadius:16,border:"1px solid rgba(45,212,168,0.3)"}}><div style={{fontSize:40,marginBottom:10}}>📎</div><div style={{fontSize:15,fontWeight:600,color:cbColors.accent}}>Drop files here</div><div style={{fontSize:12,color:cbColors.textMuted,marginTop:4}}>PDF, DOCX, Images</div></div>
+      </div>}
+
+      {/* Sidebar */}
+      <div style={{width:sidebarOpen?260:0,minWidth:sidebarOpen?260:0,background:cbColors.bgSidebar,borderRight:`1px solid ${cbColors.border}`,display:"flex",flexDirection:"column",transition:"all 0.3s ease",overflow:"hidden",backdropFilter:"blur(20px)"}}>
+        <div style={{padding:"20px 16px 14px",borderBottom:`1px solid ${cbColors.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+            <div style={{width:32,height:32,borderRadius:9,background:`linear-gradient(135deg,${cbColors.accent},${cbColors.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>⚖️</div>
+            <span style={{fontSize:17,fontWeight:700}}>Qanoon<span style={{color:cbColors.accent}}>AI</span></span>
+          </div>
+          <button onClick={startNewChat} style={{width:"100%",padding:"10px 14px",background:`linear-gradient(135deg,${cbColors.accent},${cbColors.blue})`,color:"#0a1a1a",border:"none",borderRadius:9,fontSize:13,fontWeight:600,cursor:"pointer",transition:"all 0.2s"}}>+ New Session</button>
         </div>
-        <button onClick={clearChat} style={{padding:"0.4rem 1rem", background:"rgba(224,85,85,0.1)", border:"1px solid rgba(224,85,85,0.3)", color:"var(--danger)", borderRadius:8, fontSize:"0.8rem", cursor:"pointer", fontFamily:"var(--font-body)", whiteSpace:"nowrap"}}>🗑 New Chat</button>
-      </div>
-      <div className="card" style={{flex:1, display:"flex", flexDirection:"column", padding:0, overflow:"hidden", marginBottom:0}}>
-        <div ref={scrollRef} style={{flex:1, overflowY:"auto", padding:"1.5rem", display:"flex", flexDirection:"column", gap:"1rem"}}>
-          {messages.length === 0 && (
-            <div style={{margin:"auto", textAlign:"center", color:"var(--text-muted)"}}>
-              <div style={{fontSize:48, marginBottom:"0.8rem"}}>⚖️</div>
-              <div style={{fontFamily:"var(--font-display)", fontSize:"1.1rem", fontWeight:600, marginBottom:"0.4rem", color:"var(--text-secondary)"}}>AI Legal Assistant</div>
-              <div style={{fontSize:"0.85rem"}}>Select a law category above, then ask your legal question.</div>
-            </div>
-          )}
-          {messages.map((m, i) => (
-            <div key={i} style={{display:"flex", flexDirection:"column", alignItems: m.role === "user" ? "flex-end" : "flex-start"}}>
-              <div style={{maxWidth:"75%", padding:"0.8rem 1.1rem", borderRadius: m.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px", background: m.role === "user" ? "rgba(0,196,180,0.15)" : "var(--bg-card2)", border: m.role === "user" ? "1px solid rgba(0,196,180,0.25)" : "1px solid var(--border)", fontSize:"0.88rem", lineHeight:1.6, color: m.role === "user" ? "var(--text-primary)" : "var(--text-secondary)", whiteSpace:"pre-wrap"}}>
-                {m.content}
-              </div>
-              {m.sources && m.sources.length > 0 && (
-                <div style={{maxWidth:"75%", marginTop:"4px", display:"flex", flexWrap:"wrap", gap:"4px"}}>
-                  {m.sources.slice(0,3).map((s,j) => (<span key={j} style={{fontSize:"0.65rem", padding:"2px 8px", background:"rgba(0,196,180,0.08)", border:"1px solid rgba(0,196,180,0.15)", borderRadius:100, color:"var(--accent)"}}>{s}</span>))}
-                </div>
-              )}
+        <div style={{flex:1,overflowY:"auto",padding:"10px 8px"}}>
+          <div style={{fontSize:10,fontWeight:600,color:cbColors.textMuted,padding:"6px 10px",textTransform:"uppercase",letterSpacing:"1px"}}>Recent Chats</div>
+          {sessions.map(s => (
+            <div key={s.session_id} onClick={() => loadSession(s.session_id)}
+              style={{padding:"9px 10px",borderRadius:8,cursor:"pointer",marginBottom:2,background:activeSession===s.session_id?cbColors.accentDim:"transparent",border:`1px solid ${activeSession===s.session_id?cbColors.border:"transparent"}`,display:"flex",alignItems:"center",justifyContent:"space-between",transition:"all 0.15s"}}
+              onMouseEnter={e=>{if(activeSession!==s.session_id)e.currentTarget.style.background=cbColors.bgHover;}}
+              onMouseLeave={e=>{if(activeSession!==s.session_id)e.currentTarget.style.background="transparent";}}>
+              <div style={{overflow:"hidden"}}><div style={{fontSize:12,fontWeight:500,whiteSpace:"nowrap",textOverflow:"ellipsis",overflow:"hidden",maxWidth:160}}>{s.title||"New Chat"}</div><div style={{fontSize:10,color:cbColors.textMuted,marginTop:1}}>{s.message_count||0} messages</div></div>
+              <button onClick={e=>deleteSession(s.session_id,e)} style={{background:"none",border:"none",color:cbColors.textMuted,cursor:"pointer",fontSize:12,padding:"2px 5px",opacity:0.5,transition:"all 0.15s"}} onMouseEnter={e=>{e.target.style.opacity="1";e.target.style.color="#ef4444";}} onMouseLeave={e=>{e.target.style.opacity="0.5";e.target.style.color=cbColors.textMuted;}}>✕</button>
             </div>
           ))}
-          {loading && (
-            <div style={{alignSelf:"flex-start", padding:"0.8rem 1.1rem", background:"var(--bg-card2)", border:"1px solid var(--border)", borderRadius:"14px 14px 14px 4px", color:"var(--accent)", fontSize:"0.85rem"}}>
-              ⏳ Thinking...
+        </div>
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${cbColors.border}`,fontSize:11,color:cbColors.textMuted}}>⚠️ For guidance only. Consult a licensed lawyer.</div>
+      </div>
+
+      {/* Main area */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,position:"relative"}}>
+        {/* E2EE Banner */}
+        <div style={{background:"rgba(16,60,50,0.85)",borderBottom:"1px solid rgba(45,212,168,0.15)",padding:"5px 18px",display:"flex",alignItems:"center",justifyContent:"center",gap:6,flexShrink:0}}>
+          <span style={{fontSize:12}}>🔒</span>
+          <span style={{fontSize:11,color:"#6ee7b7",fontWeight:500}}>This chat is end-to-end encrypted. Messages can only be read by you and the recipient.</span>
+        </div>
+        {/* Top bar */}
+        <div style={{height:50,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 18px",borderBottom:`1px solid ${cbColors.border}`,background:"rgba(10,26,26,0.8)",backdropFilter:"blur(12px)",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <button onClick={()=>setSidebarOpen(!sidebarOpen)} style={{background:"none",border:"none",color:cbColors.textDim,cursor:"pointer",fontSize:18,padding:"3px 6px"}}>☰</button>
+            <span style={{fontSize:13,color:cbColors.textDim,fontWeight:500}}>{activeSession?"Legal Consultation":"New Consultation"}</span>
+          </div>
+          {voice.sttSupported && <button onClick={()=>setShowVoicePanel(!showVoicePanel)} style={{padding:"5px 12px",display:"flex",alignItems:"center",gap:5,background:showVoicePanel?cbColors.accentDim:"transparent",color:showVoicePanel?cbColors.accent:cbColors.textDim,border:`1px solid ${showVoicePanel?cbColors.accent:cbColors.border}`,borderRadius:8,fontSize:12,fontWeight:500,cursor:"pointer",transition:"all 0.2s"}}>🎙️ Voice</button>}
+        </div>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"16px 0"}}>
+          {messages.length === 0 ? <CBWelcomeScreen onSuggestion={sendMessage} /> : (
+            <div style={{maxWidth:760,margin:"0 auto",padding:"0 20px"}}>
+              {messages.map((msg,i) => <CBMessageBubble key={i} msg={msg} onSpeak={voice.speak} onStopSpeak={voice.stopSpeaking} isSpeaking={voice.isSpeaking} ttsSupported={voice.ttsSupported} />)}
+              {loading && <CBTypingIndicator />}
+              <div ref={messagesEndRef} />
             </div>
           )}
         </div>
-        <div style={{padding:"1rem 1.5rem", borderTop:"1px solid var(--border)", display:"flex", gap:"8px"}}>
-          <input
-            style={{flex:1, background:"var(--bg-dark)", border:"1px solid var(--border)", borderRadius:10, padding:"0.75rem 1rem", color:"var(--text-primary)", fontSize:"0.88rem", fontFamily:"var(--font-body)", outline:"none"}}
-            placeholder={`Ask a ${category} question...`}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
-            onFocus={e => e.target.style.borderColor = "var(--accent)"}
-            onBlur={e => e.target.style.borderColor = "rgba(0,196,180,0.15)"}
-          />
-          <button onClick={sendMessage} disabled={loading || !input.trim()} style={{padding:"0.75rem 1.5rem", background: loading || !input.trim() ? "rgba(0,196,180,0.3)" : "var(--accent)", color:"#08141e", border:"none", borderRadius:10, fontWeight:600, cursor: loading || !input.trim() ? "not-allowed" : "pointer", fontFamily:"var(--font-body)", fontSize:"0.9rem"}}>
-            {loading ? "..." : "Send ➤"}
-          </button>
+
+        {/* Voice panel */}
+        {showVoicePanel && <div style={{maxWidth:760,margin:"0 auto",width:"100%",padding:"0 20px"}}><CBVoicePanel voice={voice} onMicToggle={handleMicToggle} /></div>}
+
+        {/* Input bar */}
+        <div style={{padding:"12px 20px 16px",background:"transparent",flexShrink:0}}>
+          <div style={{maxWidth:760,margin:"0 auto"}}>
+            <input ref={fileInputRef} type="file" multiple accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,.doc,.docx" style={{display:"none"}} onChange={handleFileSelect} />
+            {uploadedFiles.length > 0 && (
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8,padding:"8px 12px",background:"rgba(20,50,50,0.4)",border:`1px solid ${cbColors.border}`,borderRadius:10}}>
+                {uploadedFiles.map(f => (
+                  <div key={f.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",background:"rgba(45,212,168,0.08)",border:`1px solid ${f.status==="error"?"rgba(239,68,68,0.4)":f.status==="ready"?"rgba(45,212,168,0.25)":"rgba(255,255,255,0.1)"}`,borderRadius:7,maxWidth:200}}>
+                    {f.preview ? <img src={f.preview} alt={f.name} style={{width:28,height:28,borderRadius:4,objectFit:"cover"}} /> : <span style={{fontSize:16}}>{f.type==="application/pdf"?"📄":"📁"}</span>}
+                    <div style={{overflow:"hidden",flex:1}}><div style={{fontSize:10,fontWeight:500,whiteSpace:"nowrap",textOverflow:"ellipsis",overflow:"hidden"}}>{f.name}</div><div style={{fontSize:9,color:cbColors.textMuted}}>{f.status==="uploading"?"⏳ Processing...":f.status==="error"?"❌ Error":f.status==="ready"?"✅ Ready":""}</div></div>
+                    <button onClick={()=>removeFile(f.id)} style={{background:"none",border:"none",color:cbColors.textMuted,cursor:"pointer",fontSize:11,padding:"1px 3px",opacity:0.6}} onMouseEnter={e=>{e.target.style.opacity="1";e.target.style.color="#ef4444";}} onMouseLeave={e=>{e.target.style.opacity="0.6";e.target.style.color=cbColors.textMuted;}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{display:"flex",alignItems:"center",gap:10,background:cbColors.bgInput,border:`1px solid ${cbColors.border}`,borderRadius:13,padding:"3px 6px 3px 10px",backdropFilter:"blur(16px)",boxShadow:`0 4px 24px rgba(0,0,0,0.2),inset 0 1px 0 ${cbColors.borderLight}`}}>
+              <button onClick={()=>fileInputRef.current?.click()} disabled={uploading} style={{background:uploadedFiles.length>0?"rgba(45,212,168,0.12)":"none",border:uploadedFiles.length>0?"1px solid rgba(45,212,168,0.25)":"none",color:uploadedFiles.length>0?cbColors.accent:cbColors.textMuted,cursor:"pointer",fontSize:17,padding:"3px 5px",borderRadius:6,transition:"all 0.2s",position:"relative"}} title="Upload documents or images">
+                📎{uploadedFiles.length>0&&<span style={{position:"absolute",top:-4,right:-4,background:cbColors.accent,color:"#0a1a1a",fontSize:8,fontWeight:700,width:14,height:14,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>{uploadedFiles.length}</span>}
+              </button>
+              <textarea ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();}}} onPaste={handlePaste} placeholder={uploadedFiles.length>0?"Ask about your uploaded documents...":"Describe your legal concern..."} rows={1} style={{flex:1,background:"transparent",border:"none",outline:"none",color:cbColors.text,fontSize:13,fontFamily:"'Outfit','Inter',system-ui,sans-serif",resize:"none",padding:"11px 0",lineHeight:1.5}} />
+              {voice.sttSupported && <button onClick={handleMicToggle} style={{width:38,height:38,borderRadius:9,background:voice.isRecording?"rgba(239,68,68,0.15)":cbColors.bgHover,border:`1px solid ${voice.isRecording?cbColors.danger:cbColors.border}`,color:voice.isRecording?cbColors.danger:cbColors.textMuted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,animation:voice.isRecording?"micPulse 1.2s ease-in-out infinite":"none"}}>{voice.isRecording?"🔴":"🎙️"}</button>}
+              {(() => { const canSend = !loading && !uploadedFiles.some(f=>f.status==="uploading") && (input.trim()||uploadedFiles.length>0); return <button onClick={()=>sendMessage()} disabled={!canSend} style={{width:38,height:38,borderRadius:9,background:canSend?`linear-gradient(135deg,${cbColors.accent},${cbColors.blue})`:cbColors.bgHover,border:"none",color:canSend?"#0a1a1a":cbColors.textMuted,cursor:canSend?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,transition:"all 0.2s"}}>{loading?"⏳":"➤"}</button>; })()}
+            </div>
+          </div>
+          <div style={{textAlign:"center",marginTop:8,fontSize:10,color:cbColors.textMuted}}>QanoonAI provides legal guidance only. Always verify with a licensed lawyer.</div>
         </div>
       </div>
     </div>

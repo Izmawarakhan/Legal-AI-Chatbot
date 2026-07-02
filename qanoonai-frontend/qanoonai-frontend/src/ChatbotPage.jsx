@@ -1001,6 +1001,12 @@ export default function ChatbotPage() {
             </div>
           </div>
         )}
+        {/* E2EE Banner */}
+        <div style={{ background: "rgba(16,60,50,0.85)", borderBottom: `1px solid rgba(45,212,168,0.15)`, padding: "6px 24px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <span style={{ fontSize: 13 }}>🔒</span>
+          <span style={{ fontSize: 12, color: "#6ee7b7", fontWeight: 500 }}>This chat is end-to-end encrypted. Messages can only be read by you and the recipient.</span>
+        </div>
+
         {/* Top Navbar */}
         <div
           style={{
@@ -1556,6 +1562,9 @@ function MessageBubble({ msg, colors, onSpeak, onStopSpeak, isSpeaking, ttsSuppo
           </div>
         )}
         {msg.content}
+        <div style={{ marginTop: 4, fontSize: 10, color: "rgba(110,231,183,0.5)", display: "flex", alignItems: "center", gap: 3 }}>
+          <span>🔒</span><span>encrypted</span>
+        </div>
 
         {/* Image previews */}
         {msg.images && msg.images.length > 0 && (

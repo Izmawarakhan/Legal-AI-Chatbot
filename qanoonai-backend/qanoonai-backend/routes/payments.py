@@ -213,6 +213,29 @@ async def pay_lawyer(data: LawyerPaymentRequest):
 
 # ============ PAYMENT HISTORY ============
 
+@router.get("/history/all")
+async def get_all_payments():
+    """Admin: all payments across all users"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not connected")
+    result = []
+    for p in db.payments.find().sort("created_at", -1):
+        result.append({
+            "id": str(p["_id"]),
+            "type": p.get("type"),
+            "amount": p.get("amount"),
+            "currency": p.get("currency", "PKR"),
+            "status": p.get("status"),
+            "plan_name": p.get("plan_name"),
+            "lawyer_name": p.get("lawyer_name"),
+            "transaction_id": p.get("transaction_id"),
+            "card_last4": p.get("card_last4"),
+            "created_at": p["created_at"].isoformat() if p.get("created_at") else None,
+        })
+    return {"total": len(result), "payments": result}
+
+
 @router.get("/history/{user_id}")
 async def get_payment_history(user_id: str, role: str = "customer"):
     """Payment history"""

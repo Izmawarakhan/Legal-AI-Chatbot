@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import ChatbotPage from "./ChatbotPage";
+import { deriveKeyFromChatId, encryptMessage, decryptMessage } from "./utils/encryption";
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8001";
 const CHATBOT_URL = import.meta.env.VITE_CHATBOT_URL || "http://localhost:8000";
 const PLANS_MAP = { pro: 999, premium: 2499 };
@@ -33,13 +34,150 @@ function FindLawyerPage({ onStartChat }) {
 }
 
 function MyChatsPage() {
-  const [chats, setChats] = useState([]); const [activeChat, setActiveChat] = useState(null); const [messages, setMessages] = useState([]); const [input, setInput] = useState(""); const [loading, setLoading] = useState(true); const [sending, setSending] = useState(false); const scrollRef = useRef(null); const user = JSON.parse(localStorage.getItem("user") || "{}");
-  useEffect(() => { loadChats() }, []); useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [messages]); useEffect(() => { if (!activeChat) return; const i = setInterval(() => loadMsgs(activeChat.id), 5000); return () => clearInterval(i) }, [activeChat]);
-  const loadChats = async () => { setLoading(true); try { const r = await fetch(`${API_URL}/api/chats/user/${user.id}?role=customer`); const d = await r.json(); if (d.chats) setChats(d.chats) } catch { } finally { setLoading(false) } };
-  const loadMsgs = async (id) => { try { const r = await fetch(`${API_URL}/api/chats/${id}`); const d = await r.json(); if (d.messages) setMessages(d.messages) } catch { } };
-  const sendMsg = async () => { if (!input.trim() || !activeChat) return; setSending(true); try { await fetch(`${API_URL}/api/chats/send`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: activeChat.id, sender_id: user.id, sender_role: "customer", receiver_id: activeChat.lawyer_id, message: input, message_type: "text" }) }); setInput(""); loadMsgs(activeChat.id); loadChats() } catch { } finally { setSending(false) } };
-  const ft = (ts) => { if (!ts) return ""; try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return "" } };
-  return (<div className="chats-layout"><div className="chats-list"><div className="chats-list-header">💬 Conversations ({chats.length})</div>{loading ? <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>Loading...</div> : chats.length === 0 ? <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>No chats yet</div> : chats.map(c => (<div key={c.id} className={`chat-item ${activeChat?.id === c.id ? "active" : ""}`} onClick={() => { setActiveChat(c); loadMsgs(c.id) }}><div className="chat-item-top"><div className="chat-item-name">⚖{c.lawyer_name}</div>{c.unread > 0 && <span className="chat-item-unread">{c.unread}</span>}</div><div className="chat-item-last">{c.last_message || "No messages"}</div><div className="chat-item-time">{ft(c.last_time)}</div></div>))}</div>{!activeChat ? <div className="no-chat-selected">👈 Select a conversation</div> : <div className="chat-area"><div className="chat-area-header"><div className="chat-area-avatar">{gi(activeChat.lawyer_name)}</div><div><div className="chat-area-name">⚖{activeChat.lawyer_name}</div><div className="chat-area-status">Active</div></div></div><div className="chat-area-msgs" ref={scrollRef}>{messages.length === 0 ? <div style={{ margin: "auto", textAlign: "center", color: "var(--text-muted)" }}>💬 Start!</div> : messages.map((m, i) => (<div key={i} className={`chat-msg ${m.sender_role === "customer" ? "sent" : "received"}`}>{m.message}<div className="chat-msg-time">{ft(m.timestamp)}</div></div>))}</div><div className="chat-area-input"><input placeholder="Type..." value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendMsg()} /><button onClick={sendMsg} disabled={sending || !input.trim()}>{sending ? "..." : "Send ➤"}</button></div></div>}</div>)
+  const [chats, setChats] = useState([]);
+  const [activeChat, setActiveChat] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef(null);
+  const chatKeyRef = useRef(null); // E2EE key for active chat (in memory only)
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+
+  useEffect(() => { loadChats(); }, []);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+  useEffect(() => {
+    if (!activeChat) return;
+    const i = setInterval(() => loadMsgs(activeChat.id), 5000);
+    return () => clearInterval(i);
+  }, [activeChat]);
+
+  const loadChats = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/chats/user/${user.id}?role=customer`);
+      const d = await r.json();
+      if (d.chats) setChats(d.chats);
+    } catch { } finally { setLoading(false); }
+  };
+
+  const openChat = async (c) => {
+    // Derive E2EE key from chat_id — same key computed by lawyer side
+    chatKeyRef.current = await deriveKeyFromChatId(c.id);
+    setActiveChat(c);
+    loadMsgs(c.id);
+  };
+
+  const loadMsgs = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/api/chats/${id}`);
+      const d = await r.json();
+      if (d.messages && chatKeyRef.current) {
+        // Decrypt each message using the session key
+        const decrypted = d.messages.map(m => ({
+          ...m,
+          message: decryptMessage(m.message, chatKeyRef.current),
+        }));
+        setMessages(decrypted);
+      } else if (d.messages) {
+        setMessages(d.messages);
+      }
+    } catch { }
+  };
+
+  const sendMsg = async () => {
+    if (!input.trim() || !activeChat) return;
+    setSending(true);
+    try {
+      // Encrypt before sending — backend stores only ciphertext
+      const key = chatKeyRef.current;
+      const payload = key ? encryptMessage(input.trim(), key) : input.trim();
+      await fetch(`${API_URL}/api/chats/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: activeChat.id,
+          sender_id: user.id,
+          sender_role: "customer",
+          receiver_id: activeChat.lawyer_id,
+          message: payload,
+          message_type: "text",
+        }),
+      });
+      setInput("");
+      loadMsgs(activeChat.id);
+      loadChats();
+    } catch { } finally { setSending(false); }
+  };
+
+  const ft = (ts) => { if (!ts) return ""; try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
+
+  return (
+    <div className="chats-layout">
+      {/* Chat list */}
+      <div className="chats-list">
+        <div className="chats-list-header">💬 Conversations ({chats.length})</div>
+        {loading ? <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>Loading...</div>
+          : chats.length === 0 ? <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>No chats yet</div>
+          : chats.map(c => (
+            <div key={c.id} className={`chat-item ${activeChat?.id === c.id ? "active" : ""}`} onClick={() => openChat(c)}>
+              <div className="chat-item-top">
+                <div className="chat-item-name">⚖ {c.lawyer_name}</div>
+                {c.unread > 0 && <span className="chat-item-unread">{c.unread}</span>}
+              </div>
+              <div className="chat-item-last">🔒 {c.last_message ? "Encrypted message" : "No messages"}</div>
+              <div className="chat-item-time">{ft(c.last_time)}</div>
+            </div>
+          ))}
+      </div>
+
+      {/* Chat area */}
+      {!activeChat
+        ? <div className="no-chat-selected">👈 Select a conversation</div>
+        : <div className="chat-area">
+            {/* Header */}
+            <div className="chat-area-header">
+              <div className="chat-area-avatar">{(activeChat.lawyer_name || "?")[0].toUpperCase()}</div>
+              <div>
+                <div className="chat-area-name">⚖ {activeChat.lawyer_name}</div>
+                <div className="chat-area-status" style={{ color: "#6ee7b7", fontSize: 11 }}>🔒 End-to-end encrypted</div>
+              </div>
+            </div>
+
+            {/* E2EE notice banner */}
+            <div style={{ background: "rgba(16,60,50,0.7)", borderBottom: "1px solid rgba(45,212,168,0.12)", padding: "6px 16px", display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+              <span style={{ fontSize: 12 }}>🔒</span>
+              <span style={{ fontSize: 11, color: "#6ee7b7" }}>This chat is end-to-end encrypted. Messages can only be read by you and the recipient.</span>
+            </div>
+
+            {/* Messages */}
+            <div className="chat-area-msgs" ref={scrollRef}>
+              {messages.length === 0
+                ? <div style={{ margin: "auto", textAlign: "center", color: "var(--text-muted)" }}>💬 Start the conversation!</div>
+                : messages.map((m, i) => (
+                  <div key={i} className={`chat-msg ${m.sender_role === "customer" ? "sent" : "received"}`}>
+                    {m.message}
+                    <div className="chat-msg-time">{ft(m.timestamp)} 🔒</div>
+                  </div>
+                ))}
+            </div>
+
+            {/* Input */}
+            <div className="chat-area-input">
+              <input
+                placeholder="Type a message... (end-to-end encrypted)"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && sendMsg()}
+              />
+              <button onClick={sendMsg} disabled={sending || !input.trim()}>
+                {sending ? "..." : "Send 🔒"}
+              </button>
+            </div>
+          </div>
+      }
+    </div>
+  );
 }
 
 function MyPlanPage() {
