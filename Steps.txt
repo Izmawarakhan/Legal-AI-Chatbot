@@ -1,0 +1,19 @@
+Steps
+
+1. run all project's terminal
+2. go to ngrok folder C:\ngrok
+3. open terminal run command
+ngrok http 5173
+
+4. open link in brower generated form the terminal
+
+Session Status                online
+Account                       Izma (Plan: Free)
+Version                       3.39.8
+Region                        Asia Pacific (ap)
+Latency                       84ms
+Web Interface                 http://127.0.0.1:4040
+Forwarding                    https://zippy-detergent-imagines.ngrok-free.dev -> http://localhost:5173
+
+Connections                   ttl     opn     rt1     rt5     p50     p90
+                              46      1       0.00    0.05    0.51    7.92

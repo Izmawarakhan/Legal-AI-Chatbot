@@ -11,9 +11,9 @@
 #   uvicorn Api:app --reload --port 8000
 # ============================================
 
-import os
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+#import os
+#os.environ.setdefault("OMP_NUM_THREADS", "1")
+#os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware

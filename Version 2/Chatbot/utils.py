@@ -17,7 +17,7 @@ if "uuid_utils" not in sys.modules:
     
     compat.uuid7 = uuid7
     uuid_utils.uuid7 = uuid7
-    print("✓ UUID compatibility layer loaded")
+    print("[OK] UUID compatibility layer loaded")
 
 # ============================================
 # IMPORTS
