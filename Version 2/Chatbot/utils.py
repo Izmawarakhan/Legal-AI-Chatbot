@@ -43,7 +43,7 @@ class Config:
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
-    LLM_MODEL: str = "llama-3.3-70b-versatile"
+    LLM_MODEL: str = "openai/gpt-oss-120b"
     RETRIEVER_K: int = 5
     INDEX_PATH: str = "faiss_index_legal"
     TEMPERATURE: float = 0.1
