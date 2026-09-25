@@ -17,7 +17,7 @@ services:
   - type: web
     name: qanoonai-chatbot
     runtime: python
-    plan: starter
+    plan: free
     rootDir: Version 2/Chatbot
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn Api:app --host 0.0.0.0 --port $PORT
