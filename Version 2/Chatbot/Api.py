@@ -8,20 +8,20 @@
 #   pip install fastapi==0.103.2 pydantic==1.10.18 uvicorn==0.27.0 python-multipart pymongo certifi
 #
 # Run command:
-#   uvicorn Api:app --reload --port 8000
+#   uvicorn Api:app --reload --port 8001
 # ============================================
-
-#import os
-#os.environ.setdefault("OMP_NUM_THREADS", "1")
-#os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 from pymongo import MongoClient
 from datetime import datetime
 import uuid
 import os
+import asyncio
 import certifi
+import traceback
 from dotenv import load_dotenv
 
 # --- Import existing chatbot logic ---
@@ -77,6 +77,17 @@ app.add_middleware(
 
 
 # ============================================
+# PYDANTIC SCHEMAS (Request Validation)
+# ============================================
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    category: Optional[str] = None
+    religion: Optional[str] = "Muslim"
+    user_id: Optional[str] = None
+
+
+# ============================================
 # GLOBAL STATE
 # ============================================
 vector_store = None
@@ -87,13 +98,13 @@ db = None  # MongoDB database reference
 # ============================================
 # STARTUP EVENT
 # ============================================
-@app.on_event("startup")
-async def startup_event():
-    """Loads Knowledge Base and connects to MongoDB on server start"""
+def _load_startup_resources():
+    """Connects to MongoDB and loads the FAISS knowledge base. Runs off the event loop
+    so uvicorn can start accepting connections immediately instead of blocking on it."""
     global vector_store, db
-    
+
     print("\n🚀 Starting AI Legal Consultant API...")
-    
+
     # --- Connect to MongoDB ---
     try:
         client = MongoClient(
@@ -105,24 +116,31 @@ async def startup_event():
         # Test connection
         client.admin.command("ping")
         print("✅ MongoDB connected successfully!")
-        
+
         # Create indexes for faster queries
         db.chat_sessions.create_index("session_id", unique=True)
         db.chat_messages.create_index("session_id")
         db.chat_messages.create_index("created_at")
         print("✅ Database indexes created!")
-        
+
     except Exception as e:
         print("❌ MongoDB connection failed: {}".format(str(e)))
         print("   Chat history will NOT be saved permanently.")
         db = None
-    
+
     # --- Load FAISS Knowledge Base ---
     vector_store = get_vector_store()
     if vector_store:
         print("✅ Knowledge Base loaded successfully!")
     else:
         print("⚠️ No Knowledge Base found. Use /api/sync endpoint to build it.")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Kicks off resource loading in the background so the server can bind its
+    port and pass health checks right away instead of waiting on model/index load."""
+    asyncio.create_task(asyncio.to_thread(_load_startup_resources))
 
 
 # ============================================
@@ -250,153 +268,148 @@ async def get_categories():
 
 # -------- 3. CHAT — Main Endpoint --------
 @app.post("/api/chat")
-async def chat(request: dict):
+async def chat(request: ChatRequest):
     """
     Main chat endpoint — receives user message, returns AI response.
     Messages are automatically saved to MongoDB.
-    
-    Request body:
-    {
-        "message": "my husband is abusing me",
-        "session_id": null or "existing-session-id",
-        "category": null or "Family Law",
-        "religion": "Muslim"
-    }
     """
     global vector_store
     
     if not vector_store:
         raise HTTPException(status_code=503, detail="Knowledge Base not loaded. Please call /api/sync first.")
     
-    # Extract fields from request
-    message = request.get("message")
-    if not message:
-        raise HTTPException(status_code=400, detail="Message field is required")
+    # Extract fields from validated schema safely
+    message = request.message
+    if not message or not message.strip():
+        raise HTTPException(status_code=400, detail="Message field is required and cannot be empty")
     
-    session_id = request.get("session_id")
-    category = request.get("category")
-    religion = request.get("religion", "Muslim")
-    user_id = request.get("user_id")
+    session_id = request.session_id
+    category = request.category
+    religion = request.religion or "Muslim"
+    user_id = request.user_id
     
-    # --- Create or retrieve conversation chain ---
-    is_new_session = False
-    if not session_id or session_id not in active_conversations:
-        is_new_session = True
-        session_id = session_id or str(uuid.uuid4())
-        conversation = get_conversation_chain(vector_store, GROQ_API_KEY, religion)
-        active_conversations[session_id] = {
-            "conversation": conversation,
-            "religion": religion,
-            "category": category,
-        }
-        # Save new session to MongoDB
-        title = message[:30] + "..."
-        save_session_to_db(session_id, title, category, religion, user_id)
-    
-    conv = active_conversations[session_id]
-    
-    # Update category if provided
-    if category:
-        conv["category"] = category
-        if db is not None:
-            update_data = {"category": category}
-            if user_id:
-                update_data["user_id"] = user_id
-            db.chat_sessions.update_one(
-                {"session_id": session_id},
-                {"$set": update_data}
-            )
-    
-    # --- Build query with category context ---
-    final_query = message
-    if conv.get("category"):
-        final_query = "[SELECTED CATEGORY: {}]\n\n{}".format(conv["category"], final_query)
-    
-    # --- Get chat history from MongoDB (for existing sessions) ---
-    chat_history = get_chat_history_pairs_from_db(session_id)
-    
-    # --- Call AI ---
     try:
-        result = conv["conversation"].invoke({
-            "question": final_query,
-            "chat_history": chat_history
-        })
+        # --- Create or retrieve conversation chain ---
+        is_new_session = False
+        if not session_id or session_id not in active_conversations:
+            is_new_session = True
+            session_id = session_id or str(uuid.uuid4())
+            conversation = get_conversation_chain(vector_store, GROQ_API_KEY, religion)
+            active_conversations[session_id] = {
+                "conversation": conversation,
+                "religion": religion,
+                "category": category,
+            }
+            # Save new session to MongoDB
+            title = message[:30] + "..."
+            save_session_to_db(session_id, title, category, religion, user_id)
+        
+        conv = active_conversations[session_id]
+        
+        # Update category if provided
+        if category:
+            conv["category"] = category
+            if db is not None:
+                update_data = {"category": category}
+                if user_id:
+                    update_data["user_id"] = user_id
+                db.chat_sessions.update_one(
+                    {"session_id": session_id},
+                    {"$set": update_data}
+                )
+        
+        # --- Build query with category context ---
+        final_query = message
+        if conv.get("category"):
+            final_query = "[SELECTED CATEGORY: {}]\n\n{}".format(conv["category"], final_query)
+        
+        # --- Get chat history from MongoDB (for existing sessions) ---
+        chat_history = get_chat_history_pairs_from_db(session_id)
+        
+        # --- Call AI ---
+        try:
+            result = conv["conversation"].invoke({
+                "question": final_query,
+                "chat_history": chat_history
+            })
+        except Exception as e:
+            print("\n!!! [AI GENERATION ERROR] GROQ OR LANGCHAIN CALL FAILED !!!")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail="AI processing error: {}".format(str(e)))
+        
+        full_answer = result.get("answer", "")
+        
+        # --- Extract source documents ---
+        sources = []
+        if "source_documents" in result:
+            for doc in result["source_documents"]:
+                source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
+                cat = doc.metadata.get("category", "Unknown")
+                sources.append("{} | {}".format(cat, source_name))
+        
+        # --- Filter references unless user asked ---
+        display_answer = full_answer
+        ref_keywords = ["source", "reference", "citation", "section", "case name"]
+        if not any(k in message.lower() for k in ref_keywords) and "References" in full_answer:
+            display_answer = full_answer.split("References")[0].strip()
+        
+        # --- FIX: Force female verb forms in Roman Urdu responses ---
+        # Post-processing layer for assistant gender alignment
+        gender_replacements = [
+            ("samajh sakta hoon", "samajh sakti hoon"),
+            ("kar sakta hoon", "kar sakti hoon"),
+            ("de sakta hoon", "de sakti hoon"),
+            ("bata sakta hoon", "bata sakti hoon"),
+            ("samajhta hoon", "samajhti hoon"),
+            ("chahta hoon", "chahti hoon"),
+            ("poochta hoon", "poochti hoon"),
+            ("batata hoon", "batati hoon"),
+            ("jaanta hoon", "jaanti hoon"),
+            ("rakhta hoon", "rakhti hoon"),
+            ("karta hoon", "karti hoon"),
+            ("deta hoon", "deti hoon"),
+            ("leta hoon", "leti hoon"),
+            ("sochta hoon", "sochti hoon"),
+            ("maanta hoon", "maanti hoon"),
+            ("karunga", "karungi"),
+            ("dunga", "dungi"),
+            ("lunga", "lungi"),
+            ("bataunga", "bataungi"),
+            ("poochunga", "poochungi"),
+            ("dekhta hoon", "dekhti hoon"),
+            ("Main samajh sakta", "Main samajh sakti"),
+            ("main samajh sakta", "main samajh sakti"),
+            ("Samajh sakta hoon", "Samajh sakti hoon"),
+            ("Kar sakta hoon", "Kar sakti hoon"),
+        ]
+        
+        for male_form, female_form in gender_replacements:
+            display_answer = display_answer.replace(male_form, female_form)
+        
+        # --- Save messages to MongoDB ---
+        save_message_to_db(session_id, "user", message)
+        save_message_to_db(session_id, "assistant", display_answer, sources)
+        
+        # --- Terminal logging ---
+        print("\n--- Chat: {} ---".format(session_id[:8]))
+        print("  User: {}...".format(message[:80]))
+        print("  AI: {}...".format(display_answer[:80]))
+        print("  Sources: {}".format(len(sources)))
+        print("  Saved to DB: {}".format("Yes" if db is not None else "No"))
+        print("-" * 40)
+        
+        return {
+            "session_id": session_id,
+            "reply": display_answer,
+            "detected_category": conv.get("category"),
+            "sources": sources
+        }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail="AI processing error: {}".format(str(e)))
-    
-    full_answer = result["answer"]
-    
-    # --- Extract source documents ---
-    sources = []
-    if "source_documents" in result:
-        for doc in result["source_documents"]:
-            source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
-            cat = doc.metadata.get("category", "Unknown")
-            sources.append("{} | {}".format(cat, source_name))
-    
-    # --- Filter references unless user asked ---
-    display_answer = full_answer
-    ref_keywords = ["source", "reference", "citation", "section", "case name"]
-    if not any(k in message.lower() for k in ref_keywords) and "References" in full_answer:
-        display_answer = full_answer.split("References")[0].strip()
-    
-    # --- FIX: Force female verb forms in Roman Urdu responses ---
-    # LLM sometimes uses male forms despite prompt instructions.
-    # This post-processing guarantees female forms for AI self-reference.
-    gender_replacements = [
-        # sakta → sakti (can)
-        ("samajh sakta hoon", "samajh sakti hoon"),
-        ("kar sakta hoon", "kar sakti hoon"),
-        ("de sakta hoon", "de sakti hoon"),
-        ("bata sakta hoon", "bata sakti hoon"),
-        ("samajhta hoon", "samajhti hoon"),
-        # chahta → chahti (want)
-        ("chahta hoon", "chahti hoon"),
-        ("poochta hoon", "poochti hoon"),
-        ("batata hoon", "batati hoon"),
-        ("jaanta hoon", "jaanti hoon"),
-        ("rakhta hoon", "rakhti hoon"),
-        ("karta hoon", "karti hoon"),
-        ("deta hoon", "deti hoon"),
-        ("leta hoon", "leti hoon"),
-        ("sochta hoon", "sochti hoon"),
-        ("maanta hoon", "maanti hoon"),
-        # karunga → karungi (will do)
-        ("karunga", "karungi"),
-        ("dunga", "dungi"),
-        ("lunga", "lungi"),
-        ("bataunga", "bataungi"),
-        ("poochunga", "poochungi"),
-        ("dekhta hoon", "dekhti hoon"),
-        # Main + sakta patterns
-        ("Main samajh sakta", "Main samajh sakti"),
-        ("main samajh sakta", "main samajh sakti"),
-        # Capitalized versions
-        ("Samajh sakta hoon", "Samajh sakti hoon"),
-        ("Kar sakta hoon", "Kar sakti hoon"),
-    ]
-    
-    for male_form, female_form in gender_replacements:
-        display_answer = display_answer.replace(male_form, female_form)
-    
-    # --- Save messages to MongoDB ---
-    save_message_to_db(session_id, "user", message)
-    save_message_to_db(session_id, "assistant", display_answer, sources)
-    
-    # --- Terminal logging ---
-    print("\n--- Chat: {} ---".format(session_id[:8]))
-    print("  User: {}...".format(message[:80]))
-    print("  AI: {}...".format(display_answer[:80]))
-    print("  Sources: {}".format(len(sources)))
-    print("  Saved to DB: {}".format("Yes" if db is not None else "No"))
-    print("-" * 40)
-    
-    return {
-        "session_id": session_id,
-        "reply": display_answer,
-        "detected_category": conv.get("category"),
-        "sources": sources
-    }
+        print("\n=== [CRITICAL DEBUG ERROR] UNHANDLED EXCEPTION IN CHAT ENDPOINT ===")
+        traceback.print_exc()
+        print("===================================================================\n")
+        raise HTTPException(status_code=500, detail="Internal Server Error: {}".format(str(e)))
 
 
 # -------- 4. GET CHAT HISTORY --------
@@ -575,20 +588,3 @@ async def get_stats():
         }
     else:
         return {"error": "Database not connected"}
-
-
-# ============================================
-# HOW TO RUN
-# ============================================
-# Step 1: Make sure .env has these lines:
-#   GROQ_API_KEY=your_groq_key
-#   MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority&appName=LegalAI
-#   MONGODB_DB_NAME=legal_ai_db
-#
-# Step 2: Run server:
-#   uvicorn Api:app --reload --port 8000
-#
-# Step 3: Test:
-#   http://localhost:8000/docs
-#   http://localhost:8000/api/stats  (check DB connection)
-# ============================================
